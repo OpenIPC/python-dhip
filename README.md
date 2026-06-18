@@ -4,7 +4,7 @@ A pure-stdlib Python library for the **Dahua DHIP** (binary RPC2) protocol on
 TCP **5000**, as spoken by Dahua and Dahua-derived OEM IP cameras (e.g.
 Zenointel).
 
-It is the Dahua counterpart to [`python-dvr`](https://github.com/NeiroNx/python-dvr)
+It is the Dahua counterpart to [`python-dvr`](https://github.com/OpenIPC/python-dvr)
 (XiongMai/Sofia cameras).
 
 > This is **not** the XiongMai/Sofia "NetSurveillance" protocol (TCP 34567,
@@ -18,9 +18,15 @@ listener are all included.
 ## Install
 
 ```bash
-pip install -e .          # from a checkout
+pip install git+https://github.com/OpenIPC/python-dhip      # latest
+# or, from a checkout:
+git clone https://github.com/OpenIPC/python-dhip && cd python-dhip && pip install -e .
+
 dhip --help               # console entry point
 ```
+
+Pure stdlib — no third-party dependencies. `ffmpeg` is only needed for RTSP video
+capture (`record_rtsp` / `iter_rtsp`).
 
 ## Quick start
 
