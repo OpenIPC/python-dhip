@@ -101,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_call = sub.add_parser("call", help="raw RPC2 method")
     p_call.add_argument("method")
     p_call.add_argument("--params")
+
+    p_tel = sub.add_parser("telnet", help="enable/disable the built-in telnet server")
+    p_tel.add_argument("state", nargs="?", choices=("on", "off"),
+                       help="omit to read the current state")
     return ap
 
 
@@ -204,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
                       file=sys.stderr)
         elif cmd == "files":
             _print(cam.find_files(args.start, args.end, channel=args.channel))
+        elif cmd == "telnet":
+            if args.state is None:
+                print("on" if cam.telnet_enabled() else "off")
+            elif args.state == "on":
+                cam.set_telnet(True)
+                print("[+] telnet enabled", file=sys.stderr)
+            else:
+                cam.set_telnet(False)
+                print("[+] telnet disabled", file=sys.stderr)
         elif cmd == "events":
             listener = cam.events(codes=args.codes)
             print(f"[+] listening for events {args.codes} (Ctrl-C to stop)",
@@ -214,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
                 listener.stop()
         else:
             print("nothing to do; pass -m METHOD or a subcommand "
-                  "(info/config/users/ptz/snapshot/events)", file=sys.stderr)
+                  "(info/config/users/ptz/snapshot/events/telnet)", file=sys.stderr)
             return 2
     return 0
 

@@ -233,6 +233,30 @@ class TestPTZ(unittest.TestCase):
                 self.assertEqual(presets[0]["arg2"], 3)
 
 
+class TestTelnet(unittest.TestCase):
+    def test_set_telnet_read_modify_write(self):
+        store = {"table": {"Telnet": {"Enable": False}, "SSH": {"Enable": True}}}
+
+        def get_cfg(req):
+            return {"result": True, "params": {"table": store["table"]}}
+
+        def set_cfg(req):
+            store["table"] = req["params"]["table"]
+            return {"result": True, "params": {"options": None}}
+
+        with FakeDHIPServer({"configManager.getConfig": get_cfg,
+                             "configManager.setConfig": set_cfg}) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                self.assertFalse(cam.telnet_enabled())
+                cam.set_telnet(True)
+                self.assertTrue(store["table"]["Telnet"]["Enable"])
+                self.assertTrue(store["table"]["SSH"]["Enable"])  # preserved
+                cam.set_telnet(False)
+                self.assertFalse(store["table"]["Telnet"]["Enable"])
+                self.assertTrue(store["table"]["SSH"]["Enable"])
+
+
 class TestOSD(unittest.TestCase):
     def test_channel_title_round_trip(self):
         store = {"table": [{"Name": "cam0"}]}
