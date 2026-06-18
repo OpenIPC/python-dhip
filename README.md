@@ -108,13 +108,14 @@ dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"nam
 | `get_config(name)` / `set_config(name, table)` | `configManager.getConfig` / `setConfig` | returns/sends `params.table` |
 | `get_users()` / `get_groups()` | `userManager.getUserInfoAll` / `getGroupInfoAll` | groups come back as a bare list |
 | `add_user(...)` / `modify_user(...)` / `delete_user(name)` | `userManager.addUser` / `modifyUser` / `deleteUser` | |
-| `ptz_status(ch)` / `ptz_position(ch)` | `ptz.getStatus` | live `[pan, tilt(, zoom)]` |
+| `ptz_status(ch)` / `ptz_position(ch)` | `ptz.getStatus` | live raw `[pan, tilt(, zoom)]` (encoder units) |
+| `ptz_position_degrees(ch)` | `ptz.getStatus` | raw readout converted to `(pan°, tilt°)` |
 | `ptz_caps(ch)` | `ptz.getCurrentProtocolCaps` | pan/tilt speed ranges |
 | `ptz_is_moving(ch)` | `ptz.isMoving` | bool in `result` |
 | `ptz_start/stop/move(code, ...)` | `ptz.start` / `ptz.stop` | code API; codes in `dahua.const.PTZ_CODES` |
 | `ptz_up/down/left/right(...)` | `ptz.start`+`stop` | timed directional nudge |
 | `ptz_zoom/focus/iris(direction, ...)` | `ptz.start`+`stop` | `in`/`out`, `near`/`far`, `open`/`close` |
-| `ptz_move_absolutely(pan, tilt, zoom)` | `ptz.moveAbsolutely` | slew to an absolute position |
+| `ptz_move_absolutely(pan, tilt, zoom)` / `ptz_goto(...)` | `ptz.moveAbsolutely` | absolute slew in **degrees** (pan 0–360, tilt 0–90) |
 | `ptz_move_relatively/continuously` + `ptz_stop_move` | `ptz.move*` | modern API (not on every firmware) |
 | `ptz_get_presets` / `ptz_set/goto/clear_preset(i)` | `ptz.getPresets`, `ptz.start` (`Set/Goto/ClearPreset`) | presets via the code API |
 | `ptz_get_tours` / `ptz_start_tour(i)` / `ptz_stop_tour` | `ptz.getTours`, `ptz.start` (`Start/StopTour`) | |
@@ -185,6 +186,13 @@ Verified against a live **SD-2N-4G** (Rostelecom-branded PTZ cam, firmware
 - ⚠️ **Multi-fragment binary reassembly** (`packageIndex`) is handled
   frame-by-frame and covered by the offline test, but not observed on a real
   large-payload response (snapshots use HTTP, not the binary RPC channel here).
+- ⚠️ **PTZ coordinate units**: `ptz.moveAbsolutely` is commanded in **degrees**
+  (confirmed on the test dome — pan ≥360 is rejected). The `ptz.getStatus`
+  `Location` readout is raw encoder units (~0–8191/axis); `ptz_position_degrees`
+  converts it with the configurable `ptz_location_fullscale` / `ptz_tilt_span_deg`
+  (defaults follow the common Dahua convention). The dome's exact readback scale
+  couldn't be pinned precisely — it became unstable under repeated absolute
+  commanding — so set those attributes for your device if readings look off.
 - ⚠️ **Live video (`HttpMediaClient`, `RPC_Loadfile`)**: the `streamReader.create`
   + `RPC_Loadfile` flow is validated end-to-end against a fake HTTP server
   (`tests/test_media.py`) but **not** confirmed on hardware. The available test

@@ -188,6 +188,17 @@ class TestPTZ(unittest.TestCase):
                 self.assertEqual(cam.ptz_caps()["PanSpeedMax"], 8)
                 self.assertFalse(cam.ptz_is_moving())  # result:false != error
 
+    def test_position_degrees_conversion(self):
+        with self._server() as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                # raw [4096, 2048] with default 8192 full-scale, 90 deg tilt span
+                pan, tilt = cam.ptz_position_degrees()
+                self.assertEqual(pan, 180.0)   # 4096/8192*360
+                self.assertEqual(tilt, 22.5)   # 2048/8192*90
+                cam.ptz_location_fullscale = 4096  # override scale
+                self.assertEqual(cam.ptz_position_degrees()[0], 360.0)
+
     def test_directional_sends_code(self):
         with self._server() as srv:
             with DahuaClient("127.0.0.1", srv.port) as cam:

@@ -35,6 +35,12 @@ class DahuaClient(DHIPTransport):
         self._keepalive_interval = const.DEFAULT_KEEPALIVE
         self._keepalive_timer: threading.Timer | None = None
         self._keepalive_on = False
+        # PTZ readout scale: ptz.getStatus reports raw encoder units (~0..8191
+        # per axis) while ptz.moveAbsolutely is commanded in *degrees*. These
+        # convert the raw readout to degrees; defaults follow the common Dahua
+        # encoder convention and can be overridden per-device.
+        self.ptz_location_fullscale = 8192   # raw units for a full pan revolution
+        self.ptz_tilt_span_deg = 90.0        # physical tilt span in degrees
 
     # -- logging ------------------------------------------------------------
     def debug(self, fmt: str | None = None) -> None:
@@ -209,8 +215,21 @@ class DahuaClient(DHIPTransport):
         return self.call(const.PTZ_GET_STATUS, {"channel": channel}).get("status", {})
 
     def ptz_position(self, channel: int = 0) -> list:
-        """Current ``[pan, tilt(, zoom)]`` position."""
+        """Current raw ``[pan, tilt(, zoom)]`` position (encoder units, ~0..8191)."""
         return self.ptz_status(channel).get("Location", [])
+
+    def ptz_position_degrees(self, channel: int = 0) -> tuple:
+        """Current ``(pan_deg, tilt_deg)`` — the raw readout converted to degrees.
+
+        Uses :attr:`ptz_location_fullscale` and :attr:`ptz_tilt_span_deg`; set
+        those for your device if its encoder scale differs from the default.
+        """
+        loc = self.ptz_position(channel)
+        if len(loc) < 2:
+            return ()
+        pan = loc[0] / self.ptz_location_fullscale * 360.0
+        tilt = loc[1] / self.ptz_location_fullscale * self.ptz_tilt_span_deg
+        return (round(pan, 1), round(tilt, 1))
 
     def ptz_caps(self, channel: int = 0) -> dict:
         """Protocol capabilities (pan/tilt speed ranges, etc.)."""
@@ -273,9 +292,19 @@ class DahuaClient(DHIPTransport):
     # -- PTZ: absolute / relative / continuous -----------------------------
     def ptz_move_absolutely(self, pan: float, tilt: float, zoom: float = 0,
                             channel: int = 0) -> bool:
-        """Slew to an absolute ``[pan, tilt, zoom]`` position."""
+        """Slew to an absolute position, in **degrees**.
+
+        *pan* is 0–360, *tilt* 0–90 (values out of range are rejected by the
+        device). *zoom* is a magnification step. Read the resulting position
+        back with :meth:`ptz_position_degrees`.
+        """
         return self._ptz_bool(const.PTZ_MOVE_ABSOLUTELY,
                               {"channel": channel, "Position": [pan, tilt, zoom]})
+
+    # Friendlier alias — same degree-based absolute positioning.
+    def ptz_goto(self, pan: float, tilt: float, zoom: float = 0,
+                 channel: int = 0) -> bool:
+        return self.ptz_move_absolutely(pan, tilt, zoom, channel)
 
     def ptz_move_relatively(self, pan: float, tilt: float, zoom: float = 0,
                             channel: int = 0) -> bool:

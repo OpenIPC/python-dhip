@@ -59,9 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_ptz.add_argument("--channel", type=int, default=0)
     p_ptz.add_argument("--speed", type=int, default=4)
     p_ptz.add_argument("--duration", type=float, default=0.5)
-    p_ptz.add_argument("--pan", type=float, default=0.0)
-    p_ptz.add_argument("--tilt", type=float, default=0.0)
+    p_ptz.add_argument("--pan", type=float, default=0.0, help="degrees (0-360)")
+    p_ptz.add_argument("--tilt", type=float, default=0.0, help="degrees (0-90)")
     p_ptz.add_argument("--zoom", type=float, default=0.0)
+    p_ptz.add_argument("--degrees", action="store_true",
+                       help="for 'position': report in degrees")
 
     p_snap = sub.add_parser("snapshot", help="grab a JPEG still")
     p_snap.add_argument("output", nargs="?", default="snapshot.jpg")
@@ -128,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
             if act == "status":
                 _print(cam.ptz_status(ch))
             elif act == "position":
-                _print(cam.ptz_position(ch))
+                _print(cam.ptz_position_degrees(ch) if args.degrees
+                       else cam.ptz_position(ch))
             elif act == "home":
                 print("[+]", cam.ptz_goto_home(ch), file=sys.stderr)
             elif act == "reset":
