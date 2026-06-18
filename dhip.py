@@ -25,7 +25,8 @@ Login is the standard Dahua two-stage digest challenge/response:
     resp = MD5(f"{user}:{random}:{pwd}").hexdigest().upper()
     second global.login with password=resp
 
-Default port: 37777.
+Default port: 5000 (the DHIP/RPC2 listener; note 37777 on these devices speaks a
+different legacy framing and will not answer DHIP).
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ class DHIPError(Exception):
 
 
 class DHIPClient:
-    def __init__(self, host: str, port: int = 37777, timeout: float = 10.0):
+    def __init__(self, host: str, port: int = 5000, timeout: float = 10.0):
         self.host = host
         self.port = port
         self.timeout = timeout
@@ -193,7 +194,7 @@ def _main() -> int:
 
     ap = argparse.ArgumentParser(description="Minimal Dahua DHIP RPC2 client")
     ap.add_argument("host")
-    ap.add_argument("-p", "--port", type=int, default=37777)
+    ap.add_argument("-p", "--port", type=int, default=5000)
     ap.add_argument("-u", "--user", default="admin")
     ap.add_argument("-P", "--password", default="")
     ap.add_argument("-m", "--method", default="magicBox.getSystemInfo",
