@@ -7,23 +7,29 @@ name = "python-dhip"
 version = "0.1.0"
 description = "Pure-stdlib client for Dahua DHIP (RPC2) IP cameras"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "John" }]
-keywords = ["dahua", "dhip", "rpc2", "ip-camera", "cctv", "ptz"]
+authors = [{ name = "OpenIPC" }]
+keywords = ["dahua", "dhip", "rpc2", "ip-camera", "cctv", "ptz", "rtsp", "onvif"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video :: Capture",
     "Topic :: System :: Networking",
 ]
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/NeiroNx/python-dvr"
-Source = "https://github.com/"
+Homepage = "https://github.com/OpenIPC/python-dhip"
+Source = "https://github.com/OpenIPC/python-dhip"
+Issues = "https://github.com/OpenIPC/python-dhip/issues"
 
 [project.scripts]
 dhip = "dahua.cli:main"
