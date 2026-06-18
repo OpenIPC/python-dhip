@@ -4,8 +4,8 @@
 Usage:  python examples/stream.py <host> [user] [password] [out.dhav] [seconds]
 
 Note: requires a device whose HTTP RPC2 endpoint serves the streamReader /
-RPC_Loadfile media flow. Carrier-locked cameras (e.g. some 4G variants) disable
-it; see the README "verified vs reconstructed" section.
+RPC_Loadfile media flow. Not all firmwares do — prefer RTSP (examples/record_rtsp.py)
+where available. See the README "Device support & status" section.
 """
 import os
 import sys

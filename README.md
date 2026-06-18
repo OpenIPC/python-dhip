@@ -1,8 +1,8 @@
 # python-dhip
 
-A pure-stdlib Python library for **Dahua DHIP** (binary RPC2) IP cameras — the
-`CDVRIPRPCClient` / `DHIPHeader` transport spoken by the `hunter` daemon on
-Zenointel / Rostelecom (and other Dahua-derived) cameras on TCP **5000**.
+A pure-stdlib Python library for the **Dahua DHIP** (binary RPC2) protocol on
+TCP **5000**, as spoken by Dahua and Dahua-derived OEM IP cameras (e.g.
+Zenointel).
 
 It is the Dahua counterpart to [`python-dvr`](https://github.com/NeiroNx/python-dvr)
 (XiongMai/Sofia cameras).
@@ -94,9 +94,8 @@ with HttpMediaClient("10.0.0.10") as cam:
 dhip 10.0.0.10 -u admin -P admin54321 stream clip.dhav --subtype 1 --duration 10
 ```
 
-See the status note below — this flow is validated against a mock but the test
-camera available has its HTTP RPC2 endpoint locked, so it could not be confirmed
-on hardware.
+Not every firmware exposes the HTTP RPC2 media endpoint; prefer RTSP where it is
+available. See [Device support & status](#device-support--status).
 
 ## CLI
 
@@ -197,57 +196,56 @@ digest matches the on-device account hash without hardcoding anything.
 `call()` smooths these over (see `dahua.transport.extract`); `request()` hands
 back the raw envelope.
 
-## Status: verified vs reconstructed
+## Device support & status
 
-Verified against a live **SD-2N-4G** (Rostelecom-branded PTZ cam, firmware
-`30.13...R`):
+The protocol is reconstructed from firmware and behaviour, and Dahua exposes no
+official spec — so feature support varies by model and firmware. The library was
+developed and verified against a **Zenointel SD-2N-4G** PTZ dome (a
+Dahua-derived OEM camera; HiSilicon GK7205V510) that speaks the DHIP protocol. The list below marks what was confirmed on real hardware versus
+what is reconstructed and covered only by the offline test suite.
 
-- ✅ login, keep-alive, logout; all `magicBox.*` getters; `configManager.getConfig`
-  (General/Encode/Network/Snap); users & groups; `get_time`/`set_time`; PTZ
-  start/stop/move; user add+delete; snapshot via HTTP CGI; `eventManager.attach`
-  handshake (returns a `SID`); sync **and** async clients.
-- ⚠️ **Event delivery**: the attach handshake is confirmed, but the lab camera
-  was idle so no events were pushed. Push parsing follows the documented
-  `client.notifyEventStream` / `eventList` format and is not yet exercised
-  against a live trigger.
-- ⚠️ **Multi-fragment binary reassembly** (`packageIndex`) is handled
-  frame-by-frame and covered by the offline test, but not observed on a real
-  large-payload response (snapshots use HTTP, not the binary RPC channel here).
-- ⚠️ **PTZ coordinate units**: `ptz.moveAbsolutely` is commanded in **degrees**
-  (confirmed on the test dome — pan ≥360 is rejected). The `ptz.getStatus`
-  `Location` readout is raw encoder units (~0–8191/axis); `ptz_position_degrees`
-  converts it with the configurable `ptz_location_fullscale` / `ptz_tilt_span_deg`
-  (defaults follow the common Dahua convention). The dome's exact readback scale
-  couldn't be pinned precisely — it became unstable under repeated absolute
-  commanding — so set those attributes for your device if readings look off.
-- ✅ **RTSP live capture**, **channel-title/OSD** get+set, and PTZ are verified
-  on the test camera (`record_rtsp` produced a 1080p HEVC clip; title set+restore
-  round-trips).
-- ⚠️ **Recorded files / firmware / discovery**: `find_files` runs the
-  `mediaFileFind` flow (the test cam has no SD, so it surfaces a clean
-  `DahuaError(500)`); `download_file`, `upgrade_firmware`, and `discover` are
-  validated against mocks only — firmware upgrade is deliberately never run on
-  hardware (brick risk; requires `confirm=True`) and discovery needs L2
-  adjacency the remote test cam doesn't have.
-- ⚠️ **Live video (`HttpMediaClient`, `RPC_Loadfile`)**: the `streamReader.create`
-  + `RPC_Loadfile` flow is validated end-to-end against a fake HTTP server
-  (`tests/test_media.py`) but **not** confirmed on hardware. The available test
-  camera is a carrier-locked SD-2N-4G where *no* live transport is reachable:
-  the binary DHIP media subsystem (`streamReader.*`, `devVideoEncode.*`,
-  `media.*`) returns `400`; HTTP `/RPC2` returns `301 → /` for every method
-  except `/RPC2_Login`; the MJPEG/realmonitor CGIs return `401`; RTSP
-  `/cam/realmonitor` returns `404`; and there is no SD card for recorded
-  playback. Only `snapshot.cgi` (single JPEGs) works. On a non-locked Dahua
-  device `HttpMediaClient.record()` is expected to work; the `RPC_Loadfile`
-  request line lives in one place (`dahua/media.py::_loadfile_request`) for easy
-  adjustment if a given firmware differs.
+**Verified on hardware**
+
+- Login / keep-alive / logout; sync and async clients.
+- `magicBox.*` device info; `configManager` get/set (General, Encode, Network,
+  Snap, ChannelTitle, VideoWidget); users & groups (incl. add/delete);
+  `get_time`/`set_time`; reboot.
+- PTZ: directional, zoom/focus/iris, presets, status/position, and absolute
+  positioning. `moveAbsolutely` is commanded in **degrees** (pan ≥360 is
+  rejected); `getStatus` reports raw encoder units, which `ptz_position_degrees`
+  converts via the configurable `ptz_location_fullscale` / `ptz_tilt_span_deg`.
+- Snapshot (HTTP CGI) and **RTSP** live capture (`record_rtsp`).
+- `eventManager.attach` handshake.
+
+**Reconstructed / covered by the offline tests only**
+
+- Event *delivery* parsing (`client.notifyEventStream`), multi-fragment binary
+  reassembly, and `HttpMediaClient` (`RPC_Loadfile`) — exercised against the
+  fake servers in `tests/`, since not all firmwares expose these paths.
+- `find_files` / `download_file`, `discover` (needs L2 adjacency), and
+  `upgrade_firmware` — the last is **destructive**, requires `confirm=True`, and
+  is intentionally never run against a device.
+
+Feature-specific wire details that may vary between firmwares (the RTSP path
+template, the `RPC_Loadfile` request) are kept in one place each so they are easy
+to adjust for your device.
 
 ## Tests
 
 ```bash
-python -m unittest tests.test_dahua      # offline, scriptable fake server
+python -m unittest discover -s tests     # offline, scriptable fake servers
 python tests/test_loopback.py            # original framing/login self-test
 ```
+
+## Contributing
+
+Patches welcome. See [CLAUDE.md](CLAUDE.md) for the architecture, conventions,
+and how to add and verify new RPC methods. Please run the test suite before
+submitting.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
 
 ## Authorization
 

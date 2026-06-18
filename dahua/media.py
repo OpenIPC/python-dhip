@@ -13,12 +13,11 @@ the HTTP RPC2 channel instead:
 
 .. note::
    The ``RPC_Loadfile`` request line and the exact stream object are
-   *reconstructed* from the documented Dahua web-client flow. They are validated
-   here end-to-end against the fake server in ``tests/test_media.py`` but could
-   not be exercised against the available hardware (a carrier-locked SD-2N-4G
-   whose HTTP RPC2 endpoint is disabled — see the project notes). The wire
-   details live in one place (:meth:`HttpMediaClient._loadfile_request`) so they
-   are easy to adjust once confirmed on a capable device.
+   *reconstructed* from the documented Dahua web-client flow and validated
+   end-to-end against the fake server in ``tests/test_media.py``. Not every
+   firmware exposes the HTTP RPC2 media endpoint (prefer RTSP where available).
+   The wire details live in one place (:meth:`HttpMediaClient._loadfile_request`)
+   so they are easy to adjust for a given firmware.
 """
 
 from __future__ import annotations
