@@ -155,6 +155,34 @@ class DahuaClient(DHIPTransport):
     def get_snap_config(self) -> Any:
         return self.get_config("Snap")
 
+    def get_inner_server_config(self) -> Any:
+        """Return the ``InnerServer`` config table (Telnet, SSH, FTP, ...)."""
+        return self.get_config("InnerServer")
+
+    def set_telnet(self, enable: bool = True) -> dict:
+        """Enable or disable the built-in telnet server (``InnerServer.Telnet``).
+
+        Read-modify-write so other ``InnerServer`` subkeys (SSH, FTP, …) are
+        preserved.
+        """
+        table = self.get_inner_server_config()
+        if isinstance(table, dict):
+            sub = table.get("Telnet")
+            if not isinstance(sub, dict):
+                sub = {}
+                table["Telnet"] = sub
+            sub["Enable"] = enable
+        else:
+            table = {"Telnet": {"Enable": enable}}
+        return self.set_config("InnerServer", table)
+
+    def telnet_enabled(self) -> bool:
+        """Return ``True`` if the built-in telnet server is enabled."""
+        table = self.get_inner_server_config()
+        if isinstance(table, dict):
+            return bool(table.get("Telnet", {}).get("Enable", False))
+        return False
+
     # -- OSD / channel title -----------------------------------------------
     def get_channel_titles(self) -> list:
         """The channel title overlay strings, one per channel."""

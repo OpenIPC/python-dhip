@@ -220,6 +220,34 @@ class AsyncDahuaClient:
     async def set_config(self, name: str, table: Any) -> dict:
         return await self.call(const.SET_CONFIG, {"name": name, "table": table})
 
+    async def get_inner_server_config(self) -> Any:
+        """Return the ``InnerServer`` config table (Telnet, SSH, FTP, ...)."""
+        return await self.get_config("InnerServer")
+
+    async def set_telnet(self, enable: bool = True) -> dict:
+        """Enable or disable the built-in telnet server (``InnerServer.Telnet``).
+
+        Read-modify-write so other ``InnerServer`` subkeys (SSH, FTP, …) are
+        preserved.
+        """
+        table = await self.get_inner_server_config()
+        if isinstance(table, dict):
+            sub = table.get("Telnet")
+            if not isinstance(sub, dict):
+                sub = {}
+                table["Telnet"] = sub
+            sub["Enable"] = enable
+        else:
+            table = {"Telnet": {"Enable": enable}}
+        return await self.set_config("InnerServer", table)
+
+    async def telnet_enabled(self) -> bool:
+        """Return ``True`` if the built-in telnet server is enabled."""
+        table = await self.get_inner_server_config()
+        if isinstance(table, dict):
+            return bool(table.get("Telnet", {}).get("Enable", False))
+        return False
+
     # -- users --------------------------------------------------------------
     async def get_users(self) -> list:
         params = await self.call(const.GET_USERS)
