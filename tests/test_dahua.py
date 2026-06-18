@@ -159,6 +159,69 @@ class TestMultiFragment(unittest.TestCase):
                 self.assertEqual(bytes(acc), b"".join(chunks))
 
 
+class TestPTZ(unittest.TestCase):
+    def _server(self):
+        self.seen = []
+
+        def record(req):
+            self.seen.append((req["method"], req.get("params")))
+            return {"result": True}
+
+        handlers = {
+            "ptz.start": record,
+            "ptz.stop": record,
+            "ptz.moveAbsolutely": record,
+            "ptz.getStatus": lambda r: {"result": True,
+                                        "params": {"status": {"Location": [4096, 2048]}}},
+            "ptz.isMoving": lambda r: {"result": False, "params": None},
+            "ptz.getCurrentProtocolCaps": lambda r: {
+                "result": True, "params": {"caps": {"PanSpeedMax": 8}}},
+            "ptz.getPresets": lambda r: {"result": True, "params": {"presets": None}},
+        }
+        return FakeDHIPServer(handlers)
+
+    def test_position_and_caps(self):
+        with self._server() as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                self.assertEqual(cam.ptz_position(), [4096, 2048])
+                self.assertEqual(cam.ptz_caps()["PanSpeedMax"], 8)
+                self.assertFalse(cam.ptz_is_moving())  # result:false != error
+
+    def test_directional_sends_code(self):
+        with self._server() as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                cam.ptz_left(speed=6, duration=0)
+                starts = [p for m, p in self.seen if m == "ptz.start"]
+                self.assertEqual(starts[0]["code"], "Left")
+                self.assertEqual(starts[0]["arg2"], 6)
+                self.assertTrue(any(m == "ptz.stop" for m, _ in self.seen))
+
+    def test_zoom_maps_to_code(self):
+        with self._server() as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                cam.ptz_zoom("in", duration=0)
+                cam.ptz_zoom("out", duration=0)
+                codes = [p["code"] for m, p in self.seen if m == "ptz.start"]
+                self.assertIn("ZoomTele", codes)
+                self.assertIn("ZoomWide", codes)
+
+    def test_absolute_and_presets(self):
+        with self._server() as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                self.assertTrue(cam.ptz_move_absolutely(100, 200, 0))
+                abs_calls = [p for m, p in self.seen if m == "ptz.moveAbsolutely"]
+                self.assertEqual(abs_calls[0]["Position"], [100, 200, 0])
+                self.assertTrue(cam.ptz_goto_preset(3))
+                self.assertTrue(cam.ptz_set_preset(3))
+                presets = [p for m, p in self.seen
+                           if m == "ptz.start" and p["code"] in ("GotoPreset", "SetPreset")]
+                self.assertEqual(presets[0]["arg2"], 3)
+
+
 class TestKeepAlive(unittest.TestCase):
     def test_keepalive_timer_fires_and_cancels(self):
         hits = {"n": 0}

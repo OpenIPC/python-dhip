@@ -108,9 +108,17 @@ dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"nam
 | `get_config(name)` / `set_config(name, table)` | `configManager.getConfig` / `setConfig` | returns/sends `params.table` |
 | `get_users()` / `get_groups()` | `userManager.getUserInfoAll` / `getGroupInfoAll` | groups come back as a bare list |
 | `add_user(...)` / `modify_user(...)` / `delete_user(name)` | `userManager.addUser` / `modifyUser` / `deleteUser` | |
-| `ptz_get_presets(ch)` | `ptz.getPresets` | |
-| `ptz_start/stop/move(code, ...)` | `ptz.start` / `ptz.stop` | codes in `dahua.const.PTZ_CODES` |
-| `ptz_goto_preset/set_preset/clear_preset(i)` | `ptz.start` (`GotoPreset`/`SetPreset`/`ClearPreset`) | |
+| `ptz_status(ch)` / `ptz_position(ch)` | `ptz.getStatus` | live `[pan, tilt(, zoom)]` |
+| `ptz_caps(ch)` | `ptz.getCurrentProtocolCaps` | pan/tilt speed ranges |
+| `ptz_is_moving(ch)` | `ptz.isMoving` | bool in `result` |
+| `ptz_start/stop/move(code, ...)` | `ptz.start` / `ptz.stop` | code API; codes in `dahua.const.PTZ_CODES` |
+| `ptz_up/down/left/right(...)` | `ptz.start`+`stop` | timed directional nudge |
+| `ptz_zoom/focus/iris(direction, ...)` | `ptz.start`+`stop` | `in`/`out`, `near`/`far`, `open`/`close` |
+| `ptz_move_absolutely(pan, tilt, zoom)` | `ptz.moveAbsolutely` | slew to an absolute position |
+| `ptz_move_relatively/continuously` + `ptz_stop_move` | `ptz.move*` | modern API (not on every firmware) |
+| `ptz_get_presets` / `ptz_set/goto/clear_preset(i)` | `ptz.getPresets`, `ptz.start` (`Set/Goto/ClearPreset`) | presets via the code API |
+| `ptz_get_tours` / `ptz_start_tour(i)` / `ptz_stop_tour` | `ptz.getTours`, `ptz.start` (`Start/StopTour`) | |
+| `ptz_goto_home(ch)` / `ptz_reset(ch)` | `ptz.gotoHomePosition` (fallback `GotoHome`) / `ptz.reset` | |
 | `get_time()` / `set_time(dt)` | `global.getCurrentTime` / `setCurrentTime` | time value is in `result` |
 | `reboot()` / `shutdown()` | `magicBox.reboot` / `shutdown` | |
 | `snapshot(channel)` | HTTP CGI `/cgi-bin/snapshot.cgi` | RPC `snapManager.attach` is unsupported on these cameras |

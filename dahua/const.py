@@ -45,8 +45,20 @@ DELETE_USER = "userManager.deleteUser"
 MODIFY_PASSWORD = "userManager.modifyPassword"
 
 PTZ_GET_PRESETS = "ptz.getPresets"
+PTZ_GET_TOURS = "ptz.getTours"
+PTZ_GET_PATTERNS = "ptz.getPatterns"
+PTZ_GET_STATUS = "ptz.getStatus"
+PTZ_GET_CAPS = "ptz.getCurrentProtocolCaps"
+PTZ_IS_MOVING = "ptz.isMoving"
 PTZ_START = "ptz.start"
 PTZ_STOP = "ptz.stop"
+PTZ_MOVE_ABSOLUTELY = "ptz.moveAbsolutely"
+PTZ_MOVE_RELATIVELY = "ptz.moveRelatively"
+PTZ_MOVE_CONTINUOUSLY = "ptz.moveContinuously"
+PTZ_STOP_MOVE = "ptz.stopMove"
+PTZ_GOTO_HOME = "ptz.gotoHomePosition"
+PTZ_SET_HOME = "ptz.setHomePosition"
+PTZ_RESET = "ptz.reset"
 
 EVENT_ATTACH = "eventManager.attach"
 EVENT_DETACH = "eventManager.detach"
@@ -55,16 +67,23 @@ REBOOT = "magicBox.reboot"
 SHUTDOWN = "magicBox.shutdown"
 
 # -- PTZ operation codes ----------------------------------------------------
-# Dahua PTZ verbs accepted by ptz.start / ptz.stop.
-PTZ_CODES = (
+# Dahua PTZ verbs accepted by ptz.start / ptz.stop (the legacy code-based API,
+# the most widely-supported PTZ interface across firmwares).
+PTZ_DIRECTIONS = (
     "Up", "Down", "Left", "Right",
     "LeftUp", "LeftDown", "RightUp", "RightDown",
+)
+PTZ_CODES = PTZ_DIRECTIONS + (
     "ZoomTele", "ZoomWide",
     "FocusNear", "FocusFar",
     "IrisLarge", "IrisSmall",
     "GotoPreset", "SetPreset", "ClearPreset",
     "PositionABS", "Position",
     "StartTour", "StopTour",
+    "AutoScanOn", "AutoScanOff", "SetLeftLimit", "SetRightLimit",
+    "AutoPanOn", "AutoPanOff",
+    "StartPattern", "StopPattern", "SetPatternBegin", "SetPatternEnd",
+    "GotoHome",
 )
 
 # -- error-code -> friendly message -----------------------------------------

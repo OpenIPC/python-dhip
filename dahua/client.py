@@ -196,25 +196,41 @@ class DahuaClient(DHIPTransport):
         })
 
     # -- PTZ ----------------------------------------------------------------
-    def ptz_get_presets(self, channel: int = 0) -> list:
-        params = self.call(const.PTZ_GET_PRESETS, {"channel": channel})
-        if isinstance(params, dict):
-            return params.get("presets") or []
-        return params or []
+    # PTZ actions return a bool: a `result:false` here is usually benign
+    # (axis at its limit, "not moving", an op the firmware doesn't implement)
+    # rather than an exception-worthy error, so they go through request().
+    def _ptz_bool(self, method: str, params: dict) -> bool:
+        resp, _ = self.request(method, params)
+        return bool(resp.get("result"))
 
+    # -- PTZ: status & capabilities ----------------------------------------
+    def ptz_status(self, channel: int = 0) -> dict:
+        """Full PTZ status, incl. ``Location`` ([pan, tilt(, zoom)])."""
+        return self.call(const.PTZ_GET_STATUS, {"channel": channel}).get("status", {})
+
+    def ptz_position(self, channel: int = 0) -> list:
+        """Current ``[pan, tilt(, zoom)]`` position."""
+        return self.ptz_status(channel).get("Location", [])
+
+    def ptz_caps(self, channel: int = 0) -> dict:
+        """Protocol capabilities (pan/tilt speed ranges, etc.)."""
+        return self.call(const.PTZ_GET_CAPS, {"channel": channel}).get("caps", {})
+
+    def ptz_is_moving(self, channel: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_IS_MOVING, {"channel": channel})
+
+    # -- PTZ: low-level code API (the widely-supported interface) -----------
     def ptz_start(self, code: str, channel: int = 0,
-                  arg1: int = 0, arg2: int = 0, arg3: int = 0) -> dict:
-        return self.call(const.PTZ_START, {
+                  arg1: int = 0, arg2: int = 0, arg3: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_START, {
             "channel": channel, "code": code,
-            "arg1": arg1, "arg2": arg2, "arg3": arg3,
-        })
+            "arg1": arg1, "arg2": arg2, "arg3": arg3})
 
     def ptz_stop(self, code: str, channel: int = 0,
-                 arg1: int = 0, arg2: int = 0, arg3: int = 0) -> dict:
-        return self.call(const.PTZ_STOP, {
+                 arg1: int = 0, arg2: int = 0, arg3: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_STOP, {
             "channel": channel, "code": code,
-            "arg1": arg1, "arg2": arg2, "arg3": arg3,
-        })
+            "arg1": arg1, "arg2": arg2, "arg3": arg3})
 
     def ptz_move(self, code: str, channel: int = 0, speed: int = 4,
                  duration: float = 0.5) -> None:
@@ -223,14 +239,100 @@ class DahuaClient(DHIPTransport):
         time.sleep(duration)
         self.ptz_stop(code, channel=channel, arg2=speed)
 
-    def ptz_goto_preset(self, index: int, channel: int = 0) -> dict:
+    # -- PTZ: directional convenience --------------------------------------
+    def ptz_up(self, channel: int = 0, speed: int = 4, duration: float = 0.5):
+        self.ptz_move("Up", channel, speed, duration)
+
+    def ptz_down(self, channel: int = 0, speed: int = 4, duration: float = 0.5):
+        self.ptz_move("Down", channel, speed, duration)
+
+    def ptz_left(self, channel: int = 0, speed: int = 4, duration: float = 0.5):
+        self.ptz_move("Left", channel, speed, duration)
+
+    def ptz_right(self, channel: int = 0, speed: int = 4, duration: float = 0.5):
+        self.ptz_move("Right", channel, speed, duration)
+
+    def ptz_zoom(self, direction: str, channel: int = 0, speed: int = 1,
+                 duration: float = 0.5) -> None:
+        """Zoom ``"in"``/``"tele"`` or ``"out"``/``"wide"`` for *duration* seconds."""
+        code = "ZoomTele" if direction.lower() in ("in", "tele") else "ZoomWide"
+        self.ptz_move(code, channel, speed, duration)
+
+    def ptz_focus(self, direction: str, channel: int = 0, speed: int = 1,
+                  duration: float = 0.5) -> None:
+        """Focus ``"near"`` or ``"far"``."""
+        code = "FocusNear" if direction.lower() == "near" else "FocusFar"
+        self.ptz_move(code, channel, speed, duration)
+
+    def ptz_iris(self, direction: str, channel: int = 0, speed: int = 1,
+                 duration: float = 0.5) -> None:
+        """Iris ``"open"``/``"large"`` or ``"close"``/``"small"``."""
+        code = "IrisLarge" if direction.lower() in ("open", "large") else "IrisSmall"
+        self.ptz_move(code, channel, speed, duration)
+
+    # -- PTZ: absolute / relative / continuous -----------------------------
+    def ptz_move_absolutely(self, pan: float, tilt: float, zoom: float = 0,
+                            channel: int = 0) -> bool:
+        """Slew to an absolute ``[pan, tilt, zoom]`` position."""
+        return self._ptz_bool(const.PTZ_MOVE_ABSOLUTELY,
+                              {"channel": channel, "Position": [pan, tilt, zoom]})
+
+    def ptz_move_relatively(self, pan: float, tilt: float, zoom: float = 0,
+                            channel: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_MOVE_RELATIVELY,
+                              {"channel": channel, "Position": [pan, tilt, zoom]})
+
+    def ptz_move_continuously(self, x: float, y: float, z: float = 0,
+                              channel: int = 0) -> bool:
+        """Continuous move at velocities x (pan), y (tilt), z (zoom).
+
+        Stop with :meth:`ptz_stop_move`. Not implemented on every firmware
+        (the legacy :meth:`ptz_start`/:meth:`ptz_stop` code API is broader).
+        """
+        return self._ptz_bool(const.PTZ_MOVE_CONTINUOUSLY,
+                              {"channel": channel, "x": x, "y": y, "z": z})
+
+    def ptz_stop_move(self, channel: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_STOP_MOVE, {"channel": channel})
+
+    # -- PTZ: presets (legacy code API; works where ptz.setPreset doesn't) --
+    def ptz_get_presets(self, channel: int = 0) -> list:
+        params = self.call(const.PTZ_GET_PRESETS, {"channel": channel})
+        if isinstance(params, dict):
+            return params.get("presets") or []
+        return params or []
+
+    def ptz_goto_preset(self, index: int, channel: int = 0) -> bool:
         return self.ptz_start("GotoPreset", channel=channel, arg2=index)
 
-    def ptz_set_preset(self, index: int, channel: int = 0) -> dict:
+    def ptz_set_preset(self, index: int, channel: int = 0) -> bool:
         return self.ptz_start("SetPreset", channel=channel, arg2=index)
 
-    def ptz_clear_preset(self, index: int, channel: int = 0) -> dict:
+    def ptz_clear_preset(self, index: int, channel: int = 0) -> bool:
         return self.ptz_start("ClearPreset", channel=channel, arg2=index)
+
+    # -- PTZ: tours --------------------------------------------------------
+    def ptz_get_tours(self, channel: int = 0) -> list:
+        params = self.call(const.PTZ_GET_TOURS, {"channel": channel})
+        if isinstance(params, dict):
+            return params.get("tours") or []
+        return params or []
+
+    def ptz_start_tour(self, index: int, channel: int = 0) -> bool:
+        return self.ptz_start("StartTour", channel=channel, arg2=index)
+
+    def ptz_stop_tour(self, index: int = 0, channel: int = 0) -> bool:
+        return self.ptz_stop("StopTour", channel=channel, arg2=index)
+
+    # -- PTZ: home / reset -------------------------------------------------
+    def ptz_goto_home(self, channel: int = 0) -> bool:
+        """Go to the configured home position (falls back to the code API)."""
+        if self._ptz_bool(const.PTZ_GOTO_HOME, {"channel": channel}):
+            return True
+        return self.ptz_start("GotoHome", channel=channel)
+
+    def ptz_reset(self, channel: int = 0) -> bool:
+        return self._ptz_bool(const.PTZ_RESET, {"channel": channel})
 
     # -- time ---------------------------------------------------------------
     def get_time(self) -> datetime:

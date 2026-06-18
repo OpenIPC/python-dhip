@@ -48,11 +48,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("users", help="list users and groups")
 
-    p_ptz = sub.add_parser("ptz", help="move PTZ")
-    p_ptz.add_argument("code", choices=const.PTZ_CODES)
+    p_ptz = sub.add_parser("ptz", help="control PTZ")
+    p_ptz.add_argument(
+        "action",
+        help="a direction code (Up/Down/Left/Right/ZoomTele/...), or one of: "
+             "status, position, home, reset, goto-preset, set-preset, "
+             "clear-preset, absolute, zoom, focus, iris")
+    p_ptz.add_argument("value", nargs="?",
+                       help="preset index, or zoom/focus/iris direction")
     p_ptz.add_argument("--channel", type=int, default=0)
     p_ptz.add_argument("--speed", type=int, default=4)
     p_ptz.add_argument("--duration", type=float, default=0.5)
+    p_ptz.add_argument("--pan", type=float, default=0.0)
+    p_ptz.add_argument("--tilt", type=float, default=0.0)
+    p_ptz.add_argument("--zoom", type=float, default=0.0)
 
     p_snap = sub.add_parser("snapshot", help="grab a JPEG still")
     p_snap.add_argument("output", nargs="?", default="snapshot.jpg")
@@ -115,9 +124,32 @@ def main(argv: list[str] | None = None) -> int:
         elif cmd == "users":
             _print({"users": cam.get_users(), "groups": cam.get_groups()})
         elif cmd == "ptz":
-            cam.ptz_move(args.code, channel=args.channel,
-                         speed=args.speed, duration=args.duration)
-            print(f"[+] PTZ {args.code} for {args.duration}s", file=sys.stderr)
+            act, ch = args.action, args.channel
+            if act == "status":
+                _print(cam.ptz_status(ch))
+            elif act == "position":
+                _print(cam.ptz_position(ch))
+            elif act == "home":
+                print("[+]", cam.ptz_goto_home(ch), file=sys.stderr)
+            elif act == "reset":
+                print("[+]", cam.ptz_reset(ch), file=sys.stderr)
+            elif act in ("goto-preset", "set-preset", "clear-preset"):
+                fn = {"goto-preset": cam.ptz_goto_preset,
+                      "set-preset": cam.ptz_set_preset,
+                      "clear-preset": cam.ptz_clear_preset}[act]
+                print("[+]", fn(int(args.value), ch), file=sys.stderr)
+            elif act == "absolute":
+                print("[+]", cam.ptz_move_absolutely(args.pan, args.tilt,
+                                                     args.zoom, ch), file=sys.stderr)
+            elif act == "zoom":
+                cam.ptz_zoom(args.value or "in", ch, args.speed, args.duration)
+            elif act == "focus":
+                cam.ptz_focus(args.value or "near", ch, args.speed, args.duration)
+            elif act == "iris":
+                cam.ptz_iris(args.value or "open", ch, args.speed, args.duration)
+            else:  # a raw direction/code
+                cam.ptz_move(act, channel=ch, speed=args.speed, duration=args.duration)
+                print(f"[+] PTZ {act} for {args.duration}s", file=sys.stderr)
         elif cmd == "snapshot":
             data = cam.snapshot(channel=args.channel)
             with open(args.output, "wb") as fh:
