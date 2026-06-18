@@ -54,8 +54,29 @@ asyncio.run(main())
 
 ## Live video capture
 
-Some Dahua cameras serve live video over the binary DHIP transport; many serve
-it over the **HTTP RPC2 + `RPC_Loadfile`** channel instead. `HttpMediaClient`
+The most reliable live-video path is **RTSP** (TCP 554). The stream path is
+firmware-specific, so it's a configurable template:
+
+```python
+from dahua import DahuaClient, rtsp
+
+with DahuaClient("10.0.0.10") as cam:
+    cam.login("admin", "admin54321")
+    # standard Dahua path is the default; OEM builds differ:
+    cam.rtsp_template = rtsp.ZN_RTSP_TEMPLATE          # "/H264?ch={channel}&subtype={subtype}"
+    print(cam.rtsp_url(channel=1, subtype=0))
+    cam.record_rtsp("clip.mp4", channel=1, subtype=0, duration=10)   # needs ffmpeg
+    for chunk in cam.iter_rtsp(channel=1):             # or pipe raw MPEG-TS
+        ...
+```
+
+```bash
+dhip 10.0.0.10 -u admin -P admin54321 rtsp clip.mp4 --subtype 1 --duration 10 \
+    --template '/H264?ch={channel}&subtype={subtype}'
+```
+
+Alternatively, some Dahua cameras serve live video over the **HTTP RPC2 +
+`RPC_Loadfile`** channel. `HttpMediaClient`
 implements the latter: login → `streamReader.create {channel, subtype}` →
 `streamReader.start` → stream `GET /RPC_Loadfile/<object>` (the raw **DHAV**
 container) to a file → `streamReader.stop`/`destroy`.
@@ -126,7 +147,13 @@ dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"nam
 | `events(...)` / `iter_events(...)` | `eventManager.attach` | long-lived push stream over a dedicated connection |
 | `call(method, params)` | *any* | raises `DahuaError`, returns the unwrapped payload |
 | `request(method, params)` | *any* | low-level, returns `(envelope, binary)`, never raises |
-| `HttpMediaClient.record(out, channel, subtype, duration)` | HTTP `streamReader.*` + `RPC_Loadfile` | live video → DHAV file (separate HTTP transport) |
+| `rtsp_url` / `record_rtsp` / `iter_rtsp` | RTSP (554) | live video; configurable path template; `record_rtsp`/`iter_rtsp` need ffmpeg |
+| `get_channel_titles` / `set_channel_title(text, ch)` | `configManager` `ChannelTitle` | OSD title overlay |
+| `get_osd(ch)` / `set_osd(data, ch)` | `configManager` `VideoWidget` | OSD overlay layout/covers |
+| `find_files(start, end, ch)` | `mediaFileFind.*` | list recordings (returns `FilePath`…) |
+| `firmware_state()` / `upgrade_firmware(path, confirm=True)` | `upgrader.*` | ⚠️ upgrade is reconstructed + can brick; mock-validated only |
+| `dahua.discover(timeout)` | `DHDiscover.search` (multicast) | LAN device discovery (needs L2 adjacency) |
+| `HttpMediaClient.record(...)` / `download_file(path, out)` | HTTP `streamReader.*` / `RPC_Loadfile` | live video → DHAV / recorded-file download (HTTP transport) |
 
 ## Protocol
 
@@ -193,6 +220,15 @@ Verified against a live **SD-2N-4G** (Rostelecom-branded PTZ cam, firmware
   (defaults follow the common Dahua convention). The dome's exact readback scale
   couldn't be pinned precisely — it became unstable under repeated absolute
   commanding — so set those attributes for your device if readings look off.
+- ✅ **RTSP live capture**, **channel-title/OSD** get+set, and PTZ are verified
+  on the test camera (`record_rtsp` produced a 1080p HEVC clip; title set+restore
+  round-trips).
+- ⚠️ **Recorded files / firmware / discovery**: `find_files` runs the
+  `mediaFileFind` flow (the test cam has no SD, so it surfaces a clean
+  `DahuaError(500)`); `download_file`, `upgrade_firmware`, and `discover` are
+  validated against mocks only — firmware upgrade is deliberately never run on
+  hardware (brick risk; requires `confirm=True`) and discovery needs L2
+  adjacency the remote test cam doesn't have.
 - ⚠️ **Live video (`HttpMediaClient`, `RPC_Loadfile`)**: the `streamReader.create`
   + `RPC_Loadfile` flow is validated end-to-end against a fake HTTP server
   (`tests/test_media.py`) but **not** confirmed on hardware. The available test

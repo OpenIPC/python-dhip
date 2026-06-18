@@ -19,6 +19,10 @@ from .transport import DHIPTransport, md5_upper, login_digest
 from .client import DahuaClient, DHIPClient
 from .events import EventListener
 from .media import HttpMediaClient
+from . import rtsp
+from .rtsp import build_rtsp_url
+from . import discovery
+from .discovery import discover
 
 __version__ = "0.1.0"
 
@@ -37,6 +41,10 @@ __all__ = [
     "DHIPTransport",
     "EventListener",
     "HttpMediaClient",
+    "build_rtsp_url",
+    "rtsp",
+    "discover",
+    "discovery",
     "DHIPError",
     "DahuaError",
     "LoginError",

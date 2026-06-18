@@ -168,6 +168,33 @@ class HttpMediaClient:
             self._safe_rpc("streamReader.destroy", obj)
         return written
 
+    def download_file(self, remote_path: str, out_path: str,
+                      chunk_size: int = 65536) -> int:
+        """Download a recorded file (a ``FilePath`` from ``find_files``) to disk.
+
+        Uses ``GET /RPC_Loadfile<remote_path>`` — the documented Dahua file
+        export mechanism. Returns bytes written.
+        """
+        data_conn = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        written = 0
+        try:
+            data_conn.request("GET", f"{LOADFILE_URL}{remote_path}",
+                              headers={"Cookie": self.cookie})
+            resp = data_conn.getresponse()
+            if resp.status != 200:
+                raise DahuaError(f"RPC_Loadfile HTTP {resp.status}",
+                                 code=resp.status, method="RPC_Loadfile")
+            with open(out_path, "wb") as fh:
+                while True:
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    written += len(chunk)
+        finally:
+            data_conn.close()
+        return written
+
     def _safe_rpc(self, method: str, obj) -> None:
         try:
             self._rpc(method, {}, obj=obj)

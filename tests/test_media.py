@@ -76,6 +76,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_GET(self):
+        if self.path == "/RPC_Loadfile/mnt/sd/clip.dav":
+            body = b"DAV-RECORDED-FILE-BYTES" * 10
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == f"/RPC_Loadfile/{0xABCDEF}":
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
@@ -117,6 +124,19 @@ class TestHttpMediaCapture(unittest.TestCase):
             # the stream was torn down
             self.assertIn("streamReader.stop", self.srv.calls)
             self.assertIn("streamReader.destroy", self.srv.calls)
+        finally:
+            if os.path.exists(out):
+                os.remove(out)
+
+    def test_download_recorded_file(self):
+        out = os.path.join(os.path.dirname(__file__), "_clip.dav")
+        try:
+            with HttpMediaClient("127.0.0.1", self.port) as cam:
+                cam.login(USER, PASS)
+                n = cam.download_file("/mnt/sd/clip.dav", out)
+            self.assertEqual(n, len(b"DAV-RECORDED-FILE-BYTES" * 10))
+            with open(out, "rb") as fh:
+                self.assertTrue(fh.read().startswith(b"DAV-RECORDED-FILE-BYTES"))
         finally:
             if os.path.exists(out):
                 os.remove(out)

@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable
 
-from . import const
+from . import const, rtsp
 from .transport import DHIPTransport
 from .events import EventListener
 
@@ -41,6 +41,9 @@ class DahuaClient(DHIPTransport):
         # encoder convention and can be overridden per-device.
         self.ptz_location_fullscale = 8192   # raw units for a full pan revolution
         self.ptz_tilt_span_deg = 90.0        # physical tilt span in degrees
+        # RTSP live stream: path template is firmware-specific (see dahua.rtsp).
+        self.rtsp_port = 554
+        self.rtsp_template = rtsp.DEFAULT_RTSP_TEMPLATE
 
     # -- logging ------------------------------------------------------------
     def debug(self, fmt: str | None = None) -> None:
@@ -151,6 +154,41 @@ class DahuaClient(DHIPTransport):
 
     def get_snap_config(self) -> Any:
         return self.get_config("Snap")
+
+    # -- OSD / channel title -----------------------------------------------
+    def get_channel_titles(self) -> list:
+        """The channel title overlay strings, one per channel."""
+        table = self.get_config("ChannelTitle")
+        if isinstance(table, list):
+            return [c.get("Name", "") for c in table]
+        return [table.get("Name", "")] if isinstance(table, dict) else []
+
+    def set_channel_title(self, text: str, channel: int = 0) -> dict:
+        """Set the channel *text* overlay (read-modify-write of ChannelTitle)."""
+        table = self.get_config("ChannelTitle")
+        if not isinstance(table, list):
+            table = [table] if isinstance(table, dict) else [{}]
+        while len(table) <= channel:
+            table.append({})
+        table[channel]["Name"] = text
+        return self.set_config("ChannelTitle", table)
+
+    def get_osd(self, channel: int = 0) -> dict:
+        """VideoWidget overlay config for *channel* (title rect/colors, covers)."""
+        table = self.get_config("VideoWidget")
+        if isinstance(table, list):
+            return table[channel] if channel < len(table) else {}
+        return table if isinstance(table, dict) else {}
+
+    def set_osd(self, data: dict, channel: int = 0) -> dict:
+        """Merge *data* into the VideoWidget overlay config for *channel*."""
+        table = self.get_config("VideoWidget")
+        if not isinstance(table, list):
+            table = [table] if isinstance(table, dict) else [{}]
+        while len(table) <= channel:
+            table.append({})
+        table[channel] = {**table[channel], **data}
+        return self.set_config("VideoWidget", table)
 
     # -- users & groups -----------------------------------------------------
     def get_users(self) -> list:
@@ -390,6 +428,44 @@ class DahuaClient(DHIPTransport):
     def factory_reset(self, names: list | None = None) -> dict:
         return self.call(const.RESTORE_CONFIG, {"names": names or []})
 
+    # -- firmware -----------------------------------------------------------
+    def firmware_state(self) -> Any:
+        """Current upgrader state (safe, read-only)."""
+        return self.call("upgrader.getState")
+
+    def upgrade_firmware(self, path: str, *, confirm: bool = False,
+                         fw_type: str = "System", chunk_size: int = 0x8000,
+                         progress: Callable[[int, int], None] | None = None) -> Any:
+        """Flash a firmware image: ``upgrader.start`` → chunked send → ``execute``.
+
+        .. danger::
+           This can permanently **brick** the device and is *reconstructed* from
+           the documented Dahua upgrade flow — its orchestration is validated
+           against a mock but it was deliberately never run on hardware. You
+           must pass ``confirm=True`` to proceed.
+        """
+        if not confirm:
+            raise ValueError(
+                "upgrade_firmware can brick the device and is untested on "
+                "hardware; pass confirm=True to proceed")
+        import os
+        total = os.path.getsize(path)
+        self.call("upgrader.start", {"Type": fw_type})
+        sent = 0
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                resp, _ = self.request("upgrader.send",
+                                       {"Offset": sent, "Length": len(chunk)},
+                                       data=chunk)
+                self._check(resp, "upgrader.send")
+                sent += len(chunk)
+                if progress:
+                    progress(sent, total)
+        return self.call("upgrader.execute")
+
     # -- snapshot -----------------------------------------------------------
     def snapshot(self, channel: int = 0, http_port: int = 80) -> bytes:
         """Capture a JPEG still from *channel*.
@@ -411,6 +487,78 @@ class DahuaClient(DHIPTransport):
         )
         with opener.open(url, timeout=self.timeout) as resp:
             return resp.read()
+
+    # -- recorded files -----------------------------------------------------
+    def _call_object(self, method: str, params: dict, obj) -> Any:
+        """Call an RPC method against a factory object id, raising on failure."""
+        from .transport import extract
+        resp, _ = self.request(method, params, extra={"object": obj})
+        self._check(resp, method)
+        return extract(resp)
+
+    def find_files(self, start, end, channel: int = 0,
+                   types: list | None = None, batch: int = 100) -> list:
+        """List recordings between *start* and *end* (``datetime`` or string).
+
+        Runs the ``mediaFileFind`` flow over DHIP and returns the file-info
+        records (each carries ``FilePath``, ``StartTime``, ``EndTime``,
+        ``Length``, ...) — feed ``FilePath`` to :meth:`HttpMediaClient.download_file`.
+        """
+        if isinstance(start, datetime):
+            start = start.strftime(_TIME_FMT)
+        if isinstance(end, datetime):
+            end = end.strftime(_TIME_FMT)
+        obj = self.call("mediaFileFind.factory.create")
+        if isinstance(obj, dict):
+            obj = obj.get("instanceID") or obj.get("object") or obj
+        files: list = []
+        try:
+            self._call_object("mediaFileFind.findFile", {"condition": {
+                "Channel": channel, "Types": types or ["dav"],
+                "Order": "Ascent", "Flags": ["Timing", "Event", "Manual", "Marker"],
+                "StartTime": start, "EndTime": end}}, obj)
+            while True:
+                r = self._call_object("mediaFileFind.findNextFile",
+                                      {"count": batch}, obj)
+                infos = (r.get("infos") if isinstance(r, dict) else None) or []
+                files.extend(infos)
+                if not infos or len(infos) < batch:
+                    break
+        finally:
+            try:
+                self._call_object("mediaFileFind.close", {}, obj)
+                self._call_object("mediaFileFind.destroy", {}, obj)
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                pass
+        return files
+
+    # -- live video (RTSP) --------------------------------------------------
+    def rtsp_url(self, channel: int = 1, subtype: int = 0,
+                 template: str | None = None) -> str:
+        """Build the RTSP URL for a live stream (uses the login credentials).
+
+        *channel*/*subtype* are substituted into :attr:`rtsp_template` (default
+        the standard Dahua ``/cam/realmonitor`` path; set ``rtsp_template`` to
+        ``dahua.rtsp.ZN_RTSP_TEMPLATE`` for Zenointel-style OEM cameras).
+        """
+        return rtsp.build_rtsp_url(
+            self.host, self.username, self.password, channel=channel,
+            subtype=subtype, port=self.rtsp_port,
+            template=template or self.rtsp_template)
+
+    def record_rtsp(self, out_path: str, channel: int = 1, subtype: int = 0,
+                    duration: float = 10.0, transport: str = "tcp",
+                    reencode: bool = False, template: str | None = None) -> str:
+        """Record the live RTSP stream to *out_path* (needs ffmpeg)."""
+        return rtsp.record_rtsp(
+            self.rtsp_url(channel, subtype, template), out_path,
+            duration=duration, transport=transport, reencode=reencode)
+
+    def iter_rtsp(self, channel: int = 1, subtype: int = 0,
+                  transport: str = "tcp", template: str | None = None):
+        """Yield raw MPEG-TS chunks of the live stream (needs ffmpeg)."""
+        return rtsp.iter_rtsp(self.rtsp_url(channel, subtype, template),
+                              transport=transport)
 
     # -- events -------------------------------------------------------------
     def events(self, codes: list[str] | None = None, channel: int = 0) -> EventListener:

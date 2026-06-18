@@ -79,6 +79,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_st.add_argument("--duration", type=float, default=10.0)
     p_st.add_argument("--http-port", type=int, default=80)
 
+    p_rt = sub.add_parser("rtsp", help="record live video over RTSP (ffmpeg)")
+    p_rt.add_argument("output", nargs="?", default="rtsp.mp4")
+    p_rt.add_argument("--channel", type=int, default=1)
+    p_rt.add_argument("--subtype", type=int, default=0, help="0=main, 1=sub")
+    p_rt.add_argument("--duration", type=float, default=10.0)
+    p_rt.add_argument("--template", help="RTSP path template (e.g. ZN OEM)")
+
+    p_ti = sub.add_parser("title", help="get/set channel title overlay")
+    p_ti.add_argument("text", nargs="?", help="new title; omit to read current")
+    p_ti.add_argument("--channel", type=int, default=0)
+
+    p_fl = sub.add_parser("files", help="list recordings (mediaFileFind)")
+    p_fl.add_argument("start", help='"YYYY-MM-DD HH:MM:SS"')
+    p_fl.add_argument("end", help='"YYYY-MM-DD HH:MM:SS"')
+    p_fl.add_argument("--channel", type=int, default=0)
+
+    p_dc = sub.add_parser("discover", help="find Dahua devices on the LAN (multicast)")
+    p_dc.add_argument("--timeout", type=float, default=2.0)
+
     p_call = sub.add_parser("call", help="raw RPC2 method")
     p_call.add_argument("method")
     p_call.add_argument("--params")
@@ -87,6 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.command == "discover":
+        from .discovery import discover
+        _print(discover(timeout=args.timeout))
+        return 0
+
     cam = DahuaClient(args.host, args.port)
     if args.verbose:
         cam.debug()
@@ -165,6 +190,20 @@ def main(argv: list[str] | None = None) -> int:
                 n = media.record(args.output, channel=args.channel,
                                  subtype=args.subtype, duration=args.duration)
             print(f"[+] wrote {n} bytes to {args.output}", file=sys.stderr)
+        elif cmd == "rtsp":
+            out = cam.record_rtsp(args.output, channel=args.channel,
+                                  subtype=args.subtype, duration=args.duration,
+                                  template=args.template)
+            print(f"[+] recorded {args.duration}s to {out}", file=sys.stderr)
+        elif cmd == "title":
+            if args.text is None:
+                _print(cam.get_channel_titles())
+            else:
+                cam.set_channel_title(args.text, args.channel)
+                print(f"[+] set channel {args.channel} title -> {args.text!r}",
+                      file=sys.stderr)
+        elif cmd == "files":
+            _print(cam.find_files(args.start, args.end, channel=args.channel))
         elif cmd == "events":
             listener = cam.events(codes=args.codes)
             print(f"[+] listening for events {args.codes} (Ctrl-C to stop)",

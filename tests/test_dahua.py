@@ -233,6 +233,137 @@ class TestPTZ(unittest.TestCase):
                 self.assertEqual(presets[0]["arg2"], 3)
 
 
+class TestOSD(unittest.TestCase):
+    def test_channel_title_round_trip(self):
+        store = {"table": [{"Name": "cam0"}]}
+
+        def get_cfg(req):
+            return {"result": True, "params": {"table": store["table"]}}
+
+        def set_cfg(req):
+            store["table"] = req["params"]["table"]
+            return {"result": True, "params": {"options": None}}
+
+        with FakeDHIPServer({"configManager.getConfig": get_cfg,
+                             "configManager.setConfig": set_cfg}) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                self.assertEqual(cam.get_channel_titles(), ["cam0"])
+                cam.set_channel_title("Lobby", 0)
+                self.assertEqual(store["table"][0]["Name"], "Lobby")
+                self.assertEqual(cam.get_channel_titles(), ["Lobby"])
+
+
+class TestFindFiles(unittest.TestCase):
+    def test_mediafilefind_flow(self):
+        state = {"calls": 0}
+
+        def next_file(req):
+            state["calls"] += 1
+            if state["calls"] == 1:
+                return {"result": True, "params": {"found": 2, "infos": [
+                    {"FilePath": "/mnt/sd/a.dav", "Length": 100},
+                    {"FilePath": "/mnt/sd/b.dav", "Length": 200}]}}
+            return {"result": True, "params": {"found": 0, "infos": []}}
+
+        handlers = {
+            "mediaFileFind.factory.create": lambda r: {"result": 77},
+            "mediaFileFind.findFile": lambda r: {"result": True},
+            "mediaFileFind.findNextFile": next_file,
+            "mediaFileFind.close": lambda r: {"result": True},
+            "mediaFileFind.destroy": lambda r: {"result": True},
+        }
+        with FakeDHIPServer(handlers) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                files = cam.find_files("2026-06-01 00:00:00", "2026-06-18 23:59:59",
+                                       channel=0, batch=2)
+                self.assertEqual([f["FilePath"] for f in files],
+                                 ["/mnt/sd/a.dav", "/mnt/sd/b.dav"])
+                self.assertIn("mediaFileFind.destroy", srv.received)
+
+
+class TestFirmware(unittest.TestCase):
+    def test_upgrade_requires_confirm(self):
+        with FakeDHIPServer({}) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                with self.assertRaises(ValueError):
+                    cam.upgrade_firmware(__file__)  # no confirm=True
+
+    def test_upgrade_streams_file_in_chunks(self):
+        received = bytearray()
+
+        def send(req):
+            return {"result": True}
+
+        handlers = {
+            "upgrader.start": lambda r: {"result": True},
+            "upgrader.send": send,
+            "upgrader.execute": lambda r: {"result": True},
+        }
+        # The fake server doesn't expose binary bodies to handlers, so assert
+        # the orchestration (start/send*/execute) and chunk count instead.
+        with FakeDHIPServer(handlers) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                blob = os.path.join(os.path.dirname(__file__), "_fw.bin")
+                with open(blob, "wb") as fh:
+                    fh.write(b"X" * 10000)
+                try:
+                    seen = []
+                    cam.upgrade_firmware(blob, confirm=True, chunk_size=4096,
+                                         progress=lambda s, t: seen.append((s, t)))
+                finally:
+                    os.remove(blob)
+                self.assertEqual(srv.received.count("upgrader.send"), 3)  # 4096*3 covers 10000
+                self.assertIn("upgrader.start", srv.received)
+                self.assertIn("upgrader.execute", srv.received)
+                self.assertEqual(seen[-1], (10000, 10000))
+
+
+class TestDiscovery(unittest.TestCase):
+    def test_probe_frame_and_parse_roundtrip(self):
+        from dahua import discovery
+        frame = discovery._frame(
+            {"method": "DHDiscover.search", "params": {"mac": "", "uni": 1}})
+        # well-formed DHIP frame
+        import struct
+        from dahua import const
+        magic = struct.unpack_from(const.HEADER_FMT, frame)[1]
+        self.assertEqual(magic, const.DHIP_MAGIC)
+        # a reply frame parses back to the device info
+        reply = discovery._frame({"method": "client.notifyDevInfo",
+                                  "params": {"deviceInfo": {"SerialNo": "ABC",
+                                                            "IPv4Address": {"IPAddress": "10.0.0.9"}}}})
+        info = discovery._parse(reply)
+        self.assertEqual(info["SerialNo"], "ABC")
+
+
+class TestRtspUrl(unittest.TestCase):
+    def test_default_and_oem_templates(self):
+        from dahua import rtsp
+        std = rtsp.build_rtsp_url("cam.lan", "admin", "secret", channel=1, subtype=0)
+        self.assertEqual(
+            std, "rtsp://admin:secret@cam.lan:554/cam/realmonitor?channel=1&subtype=0")
+        oem = rtsp.build_rtsp_url("cam.lan", "admin", "secret", channel=1, subtype=1,
+                                  template=rtsp.ZN_RTSP_TEMPLATE)
+        self.assertEqual(oem, "rtsp://admin:secret@cam.lan:554/H264?ch=1&subtype=1")
+
+    def test_credentials_are_url_escaped(self):
+        from dahua import rtsp
+        u = rtsp.build_rtsp_url("h", "ad@min", "p:w/d", channel=1)
+        self.assertIn("ad%40min:p%3Aw%2Fd@h", u)
+
+    def test_client_builds_url_from_login_creds(self):
+        with FakeDHIPServer({}) as srv:
+            with DahuaClient("127.0.0.1", srv.port) as cam:
+                cam.login(USER, PASS, keep_alive=False)
+                url = cam.rtsp_url(channel=1, subtype=0)
+                self.assertIn(f"{USER}:{PASS}@127.0.0.1", url)
+                self.assertIn("/cam/realmonitor?channel=1&subtype=0", url)
+
+
 class TestKeepAlive(unittest.TestCase):
     def test_keepalive_timer_fires_and_cancels(self):
         hits = {"n": 0}
