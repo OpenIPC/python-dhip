@@ -18,6 +18,7 @@ from .exceptions import DHIPError, DahuaError, LoginError
 from .transport import DHIPTransport, md5_upper, login_digest
 from .client import DahuaClient, DHIPClient
 from .events import EventListener
+from .media import HttpMediaClient
 
 __version__ = "0.1.0"
 
@@ -35,6 +36,7 @@ __all__ = [
     "AsyncDahuaClient",
     "DHIPTransport",
     "EventListener",
+    "HttpMediaClient",
     "DHIPError",
     "DahuaError",
     "LoginError",

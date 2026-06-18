@@ -61,6 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev = sub.add_parser("events", help="stream device events")
     p_ev.add_argument("--codes", nargs="*", default=["All"])
 
+    p_st = sub.add_parser("stream", help="record live video via HTTP RPC_Loadfile")
+    p_st.add_argument("output", nargs="?", default="stream.dhav")
+    p_st.add_argument("--channel", type=int, default=0)
+    p_st.add_argument("--subtype", type=int, default=0, help="0=main, 1=sub")
+    p_st.add_argument("--duration", type=float, default=10.0)
+    p_st.add_argument("--http-port", type=int, default=80)
+
     p_call = sub.add_parser("call", help="raw RPC2 method")
     p_call.add_argument("method")
     p_call.add_argument("--params")
@@ -116,6 +123,13 @@ def main(argv: list[str] | None = None) -> int:
             with open(args.output, "wb") as fh:
                 fh.write(data)
             print(f"[+] wrote {len(data)} bytes to {args.output}", file=sys.stderr)
+        elif cmd == "stream":
+            from .media import HttpMediaClient
+            with HttpMediaClient(args.host, args.http_port) as media:
+                media.login(args.user, args.password)
+                n = media.record(args.output, channel=args.channel,
+                                 subtype=args.subtype, duration=args.duration)
+            print(f"[+] wrote {n} bytes to {args.output}", file=sys.stderr)
         elif cmd == "events":
             listener = cam.events(codes=args.codes)
             print(f"[+] listening for events {args.codes} (Ctrl-C to stop)",

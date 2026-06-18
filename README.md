@@ -52,6 +52,31 @@ async def main():
 asyncio.run(main())
 ```
 
+## Live video capture
+
+Some Dahua cameras serve live video over the binary DHIP transport; many serve
+it over the **HTTP RPC2 + `RPC_Loadfile`** channel instead. `HttpMediaClient`
+implements the latter: login → `streamReader.create {channel, subtype}` →
+`streamReader.start` → stream `GET /RPC_Loadfile/<object>` (the raw **DHAV**
+container) to a file → `streamReader.stop`/`destroy`.
+
+```python
+from dahua import HttpMediaClient
+
+with HttpMediaClient("10.0.0.10") as cam:
+    cam.login("admin", "admin54321")
+    n = cam.record("clip.dhav", channel=0, subtype=0, duration=10.0)
+    print(f"wrote {n} bytes")   # play/convert with: ffmpeg -i clip.dhav out.mp4
+```
+
+```bash
+dhip 10.0.0.10 -u admin -P admin54321 stream clip.dhav --subtype 1 --duration 10
+```
+
+See the status note below — this flow is validated against a mock but the test
+camera available has its HTTP RPC2 endpoint locked, so it could not be confirmed
+on hardware.
+
 ## CLI
 
 ```bash
@@ -92,6 +117,7 @@ dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"nam
 | `events(...)` / `iter_events(...)` | `eventManager.attach` | long-lived push stream over a dedicated connection |
 | `call(method, params)` | *any* | raises `DahuaError`, returns the unwrapped payload |
 | `request(method, params)` | *any* | low-level, returns `(envelope, binary)`, never raises |
+| `HttpMediaClient.record(out, channel, subtype, duration)` | HTTP `streamReader.*` + `RPC_Loadfile` | live video → DHAV file (separate HTTP transport) |
 
 ## Protocol
 
@@ -151,6 +177,18 @@ Verified against a live **SD-2N-4G** (Rostelecom-branded PTZ cam, firmware
 - ⚠️ **Multi-fragment binary reassembly** (`packageIndex`) is handled
   frame-by-frame and covered by the offline test, but not observed on a real
   large-payload response (snapshots use HTTP, not the binary RPC channel here).
+- ⚠️ **Live video (`HttpMediaClient`, `RPC_Loadfile`)**: the `streamReader.create`
+  + `RPC_Loadfile` flow is validated end-to-end against a fake HTTP server
+  (`tests/test_media.py`) but **not** confirmed on hardware. The available test
+  camera is a carrier-locked SD-2N-4G where *no* live transport is reachable:
+  the binary DHIP media subsystem (`streamReader.*`, `devVideoEncode.*`,
+  `media.*`) returns `400`; HTTP `/RPC2` returns `301 → /` for every method
+  except `/RPC2_Login`; the MJPEG/realmonitor CGIs return `401`; RTSP
+  `/cam/realmonitor` returns `404`; and there is no SD card for recorded
+  playback. Only `snapshot.cgi` (single JPEGs) works. On a non-locked Dahua
+  device `HttpMediaClient.record()` is expected to work; the `RPC_Loadfile`
+  request line lives in one place (`dahua/media.py::_loadfile_request`) for easy
+  adjustment if a given firmware differs.
 
 ## Tests
 
