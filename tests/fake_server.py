@@ -57,7 +57,12 @@ class FakeDHIPServer:
         _, magic, sess, rid, pkg, idx, mlen, dlen = struct.unpack(HEADER_FMT, hdr)
         assert magic == DHIP_MAGIC
         body = self._recv(sock, pkg) if pkg else b""
-        return json.loads(body[:mlen].decode()), sess
+        obj = json.loads(body[:mlen].decode())
+        if dlen:
+            # expose the trailing binary payload so handlers can verify a request
+            # whose params must describe it (e.g. upgrader.appendData length).
+            obj["__data__"] = body[mlen:mlen + dlen]
+        return obj, sess
 
     def _send(self, sock, obj, data=b"", index=0):
         body = json.dumps(obj, separators=(",", ":")).encode()

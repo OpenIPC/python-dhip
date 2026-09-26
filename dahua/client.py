@@ -472,18 +472,23 @@ class DahuaClient(DHIPTransport):
         to). *path* is the vendor upgrade package (a Dahua "zzip" — see
         ``tools/zzip.py`` in the zenointel project), not a raw partition image.
 
+        ``appendData`` is sent params ``{"length": len(chunk)}`` (lowercase) with
+        the chunk as the trailing binary payload — the handler rejects the call
+        with ``400 "param error"`` unless ``params.length`` equals the actual
+        payload length. State machine: ``prepare`` (0→2) → ``appendData`` (2/4,
+        repeatable) → ``execute`` (4→0), with a ~60 s idle timeout.
+
         .. danger::
-           This can permanently **brick** the device. The orchestration is
-           validated against a mock and the method names are reversed from
-           firmware, but the JSON param names are not byte-proven and this has
-           deliberately never been run on hardware. Probe :meth:`firmware_state`
-           first, keep a UART/backup recovery path ready, and pass
-           ``confirm=True`` to proceed.
+           This can permanently **brick** the device. The flow is validated
+           end-to-end on hardware (a GK7205V510 flashed an OpenIPC package and
+           rebooted into it), but any wrong package for the target still bricks
+           it. Probe :meth:`firmware_state` first, keep a UART/backup recovery
+           path ready, and pass ``confirm=True`` to proceed.
         """
         if not confirm:
             raise ValueError(
-                "upgrade_firmware can brick the device and is untested on "
-                "hardware; pass confirm=True to proceed")
+                "upgrade_firmware writes device partitions and can brick the "
+                "device; pass confirm=True to proceed")
         import os
         total = os.path.getsize(path)
         self.call(const.UPGRADER_PREPARE, {"Type": fw_type})
@@ -494,7 +499,7 @@ class DahuaClient(DHIPTransport):
                 if not chunk:
                     break
                 resp, _ = self.request(const.UPGRADER_APPEND,
-                                       {"Offset": sent, "Length": len(chunk)},
+                                       {"length": len(chunk)},
                                        data=chunk)
                 self._check(resp, const.UPGRADER_APPEND)
                 sent += len(chunk)

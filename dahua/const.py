@@ -69,10 +69,10 @@ SHUTDOWN = "magicBox.shutdown"
 # -- firmware upgrade -------------------------------------------------------
 # The `hunter` daemon's RPC upgrade handlers (reversed on a Zenointel GK7205
 # camera): prepare -> appendData(chunk) -> execute; getState is read-only. These
-# are the same handlers the web /cgi-bin/upgrader.cgi bridges to. The JSON param
-# names below (Type / Offset+Length) match the reversed "append upgrade data"
-# stream but are not byte-proven — verify against upgrader.getState / a web
-# capture before trusting a real flash.
+# are the same handlers the web /cgi-bin/upgrader.cgi bridges to. Validated on a
+# GK7205V510 (hunter decompile + live flash): appendData takes params {"length": N}
+# with an N-byte binary payload; prepare/execute params are ignored. State machine:
+# prepare(0->2) -> appendData(2/4, chunks) -> execute(4->0); ~60s idle timeout.
 UPGRADER_STATE = "upgrader.getState"
 UPGRADER_PREPARE = "upgrader.prepare"
 UPGRADER_APPEND = "upgrader.appendData"
