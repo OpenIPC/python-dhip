@@ -322,8 +322,8 @@ class TestFirmware(unittest.TestCase):
             return {"result": True}
 
         handlers = {
-            "upgrader.start": lambda r: {"result": True},
-            "upgrader.send": send,
+            "upgrader.prepare": lambda r: {"result": True},
+            "upgrader.appendData": send,
             "upgrader.execute": lambda r: {"result": True},
         }
         # The fake server doesn't expose binary bodies to handlers, so assert
@@ -340,8 +340,8 @@ class TestFirmware(unittest.TestCase):
                                          progress=lambda s, t: seen.append((s, t)))
                 finally:
                     os.remove(blob)
-                self.assertEqual(srv.received.count("upgrader.send"), 3)  # 4096*3 covers 10000
-                self.assertIn("upgrader.start", srv.received)
+                self.assertEqual(srv.received.count("upgrader.appendData"), 3)  # 4096*3 covers 10000
+                self.assertIn("upgrader.prepare", srv.received)
                 self.assertIn("upgrader.execute", srv.received)
                 self.assertEqual(seen[-1], (10000, 10000))
 
