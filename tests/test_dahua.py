@@ -316,9 +316,13 @@ class TestFirmware(unittest.TestCase):
                     cam.upgrade_firmware(__file__)  # no confirm=True
 
     def test_upgrade_streams_file_in_chunks(self):
-        received = bytearray()
+        append_params = []
 
         def send(req):
+            # The device rejects appendData unless params is exactly
+            # {"length": <payload length>}. Record params + the actual binary
+            # payload length so a regression to {"Offset","Length"} is caught.
+            append_params.append((req.get("params"), len(req.get("__data__", b""))))
             return {"result": True}
 
         handlers = {
@@ -326,8 +330,6 @@ class TestFirmware(unittest.TestCase):
             "upgrader.appendData": send,
             "upgrader.execute": lambda r: {"result": True},
         }
-        # The fake server doesn't expose binary bodies to handlers, so assert
-        # the orchestration (start/send*/execute) and chunk count instead.
         with FakeDHIPServer(handlers) as srv:
             with DahuaClient("127.0.0.1", srv.port) as cam:
                 cam.login(USER, PASS, keep_alive=False)
@@ -344,6 +346,12 @@ class TestFirmware(unittest.TestCase):
                 self.assertIn("upgrader.prepare", srv.received)
                 self.assertIn("upgrader.execute", srv.received)
                 self.assertEqual(seen[-1], (10000, 10000))
+                # params must be exactly {"length": N} with N == the real payload
+                # length for every chunk (4096, 4096, 1808) — nothing else.
+                self.assertEqual([p for p, _ in append_params],
+                                 [{"length": 4096}, {"length": 4096}, {"length": 1808}])
+                self.assertEqual([(p["length"], n) for p, n in append_params],
+                                 [(4096, 4096), (4096, 4096), (1808, 1808)])
 
 
 class TestDiscovery(unittest.TestCase):
