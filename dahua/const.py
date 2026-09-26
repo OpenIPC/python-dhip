@@ -66,6 +66,18 @@ EVENT_DETACH = "eventManager.detach"
 REBOOT = "magicBox.reboot"
 SHUTDOWN = "magicBox.shutdown"
 
+# -- firmware upgrade -------------------------------------------------------
+# The `hunter` daemon's RPC upgrade handlers (reversed on a Zenointel GK7205
+# camera): prepare -> appendData(chunk) -> execute; getState is read-only. These
+# are the same handlers the web /cgi-bin/upgrader.cgi bridges to. The JSON param
+# names below (Type / Offset+Length) match the reversed "append upgrade data"
+# stream but are not byte-proven — verify against upgrader.getState / a web
+# capture before trusting a real flash.
+UPGRADER_STATE = "upgrader.getState"
+UPGRADER_PREPARE = "upgrader.prepare"
+UPGRADER_APPEND = "upgrader.appendData"
+UPGRADER_EXECUTE = "upgrader.execute"
+
 # -- PTZ operation codes ----------------------------------------------------
 # Dahua PTZ verbs accepted by ptz.start / ptz.stop (the legacy code-based API,
 # the most widely-supported PTZ interface across firmwares).

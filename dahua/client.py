@@ -458,19 +458,27 @@ class DahuaClient(DHIPTransport):
 
     # -- firmware -----------------------------------------------------------
     def firmware_state(self) -> Any:
-        """Current upgrader state (safe, read-only)."""
-        return self.call("upgrader.getState")
+        """Current upgrader state (safe, read-only): ``upgrader.getState``."""
+        return self.call(const.UPGRADER_STATE)
 
     def upgrade_firmware(self, path: str, *, confirm: bool = False,
                          fw_type: str = "System", chunk_size: int = 0x8000,
                          progress: Callable[[int, int], None] | None = None) -> Any:
-        """Flash a firmware image: ``upgrader.start`` → chunked send → ``execute``.
+        """Flash a firmware image over DHIP:
+        ``upgrader.prepare`` → chunked ``upgrader.appendData`` → ``upgrader.execute``.
+
+        These are the `hunter` daemon's RPC upgrade handlers as reversed on a
+        Zenointel GK7205 camera (the same ones the web ``upgrader.cgi`` bridges
+        to). *path* is the vendor upgrade package (a Dahua "zzip" — see
+        ``tools/zzip.py`` in the zenointel project), not a raw partition image.
 
         .. danger::
-           This can permanently **brick** the device and is *reconstructed* from
-           the documented Dahua upgrade flow — its orchestration is validated
-           against a mock but it was deliberately never run on hardware. You
-           must pass ``confirm=True`` to proceed.
+           This can permanently **brick** the device. The orchestration is
+           validated against a mock and the method names are reversed from
+           firmware, but the JSON param names are not byte-proven and this has
+           deliberately never been run on hardware. Probe :meth:`firmware_state`
+           first, keep a UART/backup recovery path ready, and pass
+           ``confirm=True`` to proceed.
         """
         if not confirm:
             raise ValueError(
@@ -478,21 +486,21 @@ class DahuaClient(DHIPTransport):
                 "hardware; pass confirm=True to proceed")
         import os
         total = os.path.getsize(path)
-        self.call("upgrader.start", {"Type": fw_type})
+        self.call(const.UPGRADER_PREPARE, {"Type": fw_type})
         sent = 0
         with open(path, "rb") as fh:
             while True:
                 chunk = fh.read(chunk_size)
                 if not chunk:
                     break
-                resp, _ = self.request("upgrader.send",
+                resp, _ = self.request(const.UPGRADER_APPEND,
                                        {"Offset": sent, "Length": len(chunk)},
                                        data=chunk)
-                self._check(resp, "upgrader.send")
+                self._check(resp, const.UPGRADER_APPEND)
                 sent += len(chunk)
                 if progress:
                     progress(sent, total)
-        return self.call("upgrader.execute")
+        return self.call(const.UPGRADER_EXECUTE)
 
     # -- snapshot -----------------------------------------------------------
     def snapshot(self, channel: int = 0, http_port: int = 80) -> bytes:
