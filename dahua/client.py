@@ -494,7 +494,7 @@ class DahuaClient(DHIPTransport):
                 if not chunk:
                     break
                 resp, _ = self.request(const.UPGRADER_APPEND,
-                                       {"Offset": sent, "Length": len(chunk)},
+                                       {"length": len(chunk)},
                                        data=chunk)
                 self._check(resp, const.UPGRADER_APPEND)
                 sent += len(chunk)
