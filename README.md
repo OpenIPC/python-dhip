@@ -156,7 +156,7 @@ dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"nam
 | `get_channel_titles` / `set_channel_title(text, ch)` | `configManager` `ChannelTitle` | OSD title overlay |
 | `get_osd(ch)` / `set_osd(data, ch)` | `configManager` `VideoWidget` | OSD overlay layout/covers |
 | `find_files(start, end, ch)` | `mediaFileFind.*` | list recordings (returns `FilePath`…) |
-| `firmware_state()` / `upgrade_firmware(path, confirm=True)` | `upgrader.*` | ⚠️ upgrade is reconstructed + can brick; mock-validated only |
+| `firmware_state()` / `upgrade_firmware(path, confirm=True)` | `upgrader.*` | ⚠️ writes device partitions (can brick); flashed OpenIPC end-to-end on a GK7205V510 |
 | `dahua.discover(timeout)` | `DHDiscover.search` (multicast) | LAN device discovery (needs L2 adjacency) |
 | `HttpMediaClient.record(...)` / `download_file(path, out)` | HTTP `streamReader.*` / `RPC_Loadfile` | live video → DHAV / recorded-file download (HTTP transport) |
 
@@ -222,15 +222,19 @@ what is reconstructed and covered only by the offline test suite.
   converts via the configurable `ptz_location_fullscale` / `ptz_tilt_span_deg`.
 - Snapshot (HTTP CGI) and **RTSP** live capture (`record_rtsp`).
 - `eventManager.attach` handshake.
+- Firmware upgrade over DHIP: `firmware_state()` and `upgrade_firmware()`
+  (`upgrader.prepare` → chunked `appendData` → `execute`) flashed an OpenIPC
+  package onto a GK7205V510 end-to-end and rebooted into it. **Destructive** —
+  requires `confirm=True` and a package built for the exact target.
 
 **Reconstructed / covered by the offline tests only**
 
 - Event *delivery* parsing (`client.notifyEventStream`), multi-fragment binary
   reassembly, and `HttpMediaClient` (`RPC_Loadfile`) — exercised against the
   fake servers in `tests/`, since not all firmwares expose these paths.
-- `find_files` / `download_file`, `discover` (needs L2 adjacency), and
-  `upgrade_firmware` — the last is **destructive**, requires `confirm=True`, and
-  is intentionally never run against a device.
+- `find_files` / `download_file` and `discover` (needs L2 adjacency) —
+  exercised against the fake servers in `tests/`, since not all firmwares expose
+  these paths.
 
 Feature-specific wire details that may vary between firmwares (the RTSP path
 template, the `RPC_Loadfile` request) are kept in one place each so they are easy
