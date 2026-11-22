@@ -1,10 +1,11 @@
 """Offline tests for dahua.nanddump: telnet framing, marker/rc handling,
 base64 stream decoding, /proc/mtd parsing, and a fake busybox end-to-end.
 
-The fake server speaks just enough of a busybox telnet session to exercise
-the real client: login prompt(s), an optional "Last login: ..." banner,
-marker-framed commands with `dd | base64` payloads, and Telnet control
-sequences deliberately split across writes.
+stdlib unittest only (the CI runs `python -m unittest discover` without
+pytest). The fake server speaks just enough of a busybox telnetd session to
+exercise the real client: login prompt(s), an optional "Last login: ..."
+banner, marker-framed commands with `dd | base64` payloads, and Telnet
+control sequences deliberately split across writes.
 """
 import base64
 import os
@@ -12,8 +13,7 @@ import re
 import socket
 import tempfile
 import threading
-
-import pytest
+import unittest
 
 from dahua.nanddump import (
     TelnetShell, ShellError, _MarkerSplit, _Base64FileSink, parse_proc_mtd,
@@ -48,70 +48,65 @@ mtd12: 00000020 0001f000 "config"
 IAC_CTRL = re.compile(rb"\xff[\xfa-\xfe].")
 
 
-# -- parsers -------------------------------------------------------------------
+class TestParsers(unittest.TestCase):
 
-def test_parse_proc_mtd_tags_ubi_volumes():
-    parts = parse_proc_mtd(MTD_TEXT)
-    assert [p["idx"] for p in parts] == list(range(13))
-    assert [p["idx"] for p in parts if p["ubi"]] == [10, 11, 12]
-    assert parts[3]["size"] == 0x2A00000
-    assert [p["idx"] for p in parts if not p["ubi"]] == list(range(10))
+    def test_parse_proc_mtd_tags_ubi_volumes(self):
+        parts = parse_proc_mtd(MTD_TEXT)
+        self.assertEqual([p["idx"] for p in parts], list(range(13)))
+        self.assertEqual([p["idx"] for p in parts if p["ubi"]], [10, 11, 12])
+        self.assertEqual(parts[3]["size"], 0x2A00000)
+        self.assertEqual([p["idx"] for p in parts if not p["ubi"]],
+                         list(range(10)))
 
+    def test_marker_split_normal_and_rc(self):
+        m = _MarkerSplit("MK")
+        emit = m.feed("noise\r\nMKCMD\n") + m.feed("PAYLOAD\nMK") \
+            + m.feed("END0\r\n/ # ")
+        # "MKEND" straddled the last two feeds: held-back bytes came back in order
+        self.assertEqual(emit, "\nPAYLOAD\n")
+        self.assertTrue(m.finished)
+        self.assertEqual(m.rc_digits()[1], 0)
 
-def test_marker_split_normal_and_rc():
-    m = _MarkerSplit("MK")
-    emit = m.feed("noise\r\nMKCMD\n") + m.feed("PAYLOAD\nMK") + m.feed("END0\r\n/ # ")
-    # "MKEND" straddled the last two feeds: the held-back bytes came back in order
-    assert emit == "\nPAYLOAD\n"
-    assert m.finished
-    assert m.rc_digits()[1] == 0
+    def test_marker_split_cmd_and_end_straddle_chunks(self):
+        m = _MarkerSplit("MK")
+        emit = ""
+        for chunk in ["echo $__m\"CMD\"; dd ...\r\n",   # echoed line: no marker
+                      "M", "KCMD\nDATA",                # CMD marker split
+                      "M", "KEND7\n"]:                  # END marker split
+            emit += m.feed(chunk)
+        self.assertEqual(emit, "\nDATA")
+        self.assertTrue(m.finished)
+        self.assertEqual(m.rc_digits()[1], 7)
 
+    def test_base64_sink_decodes_stream_with_noise_and_crs(self):
+        blob = bytes(range(256)) * 41
+        armor = base64.b64encode(blob).decode()
+        stream = "\r\n/ # \r\n" + armor + "\r\n"
+        with tempfile.NamedTemporaryFile(suffix=".part", delete=False) as tf:
+            path = tf.name
+        try:
+            sink = _Base64FileSink(path)
+            for i in range(0, len(stream), 7):        # lines straddle feeds
+                sink.feed(stream[i:i + 7])
+            self.assertEqual(sink.finish(), len(blob))
+            with open(path, "rb") as f:
+                self.assertEqual(f.read(), blob)
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
 
-def test_marker_split_cmd_and_end_straddle_chunks():
-    m = _MarkerSplit("MK")
-    emit = ""
-    for chunk in ["echo $__m\"CMD\"; dd ...\r\n",   # echoed line: no marker
-                  "M", "KCMD\nDATA",                # CMD marker split
-                  "M", "KEND7\n"]:                  # END marker split
-        emit += m.feed(chunk)
-    assert emit == "\nDATA"
-    assert m.finished
-    assert m.rc_digits()[1] == 7
-
-
-def test_base64_sink_decodes_stream_with_noise_and_crs():
-    blob = bytes(range(256)) * 41
-    armor = base64.b64encode(blob).decode()
-    # wrap in CRs and prompt noise, feed in awkward small chunks
-    stream = "\r\n/ # \r\n" + armor + "\r\n"
-    with tempfile.NamedTemporaryFile(suffix=".part", delete=False) as tf:
-        path = tf.name
-    sink = _Base64FileSink(path)
-    try:
-        for i in range(0, len(stream), 7):          # lines straddle feeds
-            sink.feed(stream[i:i + 7])
-        assert sink.finish() == len(blob)
-        with open(path, "rb") as f:
-            assert f.read() == blob
-    finally:
-        if os.path.exists(path):
+    def test_base64_sink_rejects_corrupted_payload(self):
+        with tempfile.NamedTemporaryFile(suffix=".part", delete=False) as tf:
+            path = tf.name
+        sink = _Base64FileSink(path)
+        try:
+            with self.assertRaises(Exception):
+                sink.feed("QUJD\n")                    # a fine line
+                sink.feed("ABCDE\n")                   # passes the charset
+                sink.finish()                          # regex, not valid base64
+        finally:
             os.unlink(path)
 
-
-def test_base64_sink_rejects_corrupted_payload():
-    with tempfile.NamedTemporaryFile(suffix=".part", delete=False) as tf:
-        path = tf.name
-    sink = _Base64FileSink(path)
-    try:
-        with pytest.raises(Exception):
-            sink.feed("QUJD\n")                     # a fine line
-            sink.feed("ABCDE\n")                     # passes the charset regex,
-            sink.finish()                           # but is not valid base64
-    finally:
-        os.unlink(path)
-
-
-# -- negotiation ----------------------------------------------------------------
 
 def _bare_shell(sock):
     sh = TelnetShell.__new__(TelnetShell)
@@ -120,29 +115,30 @@ def _bare_shell(sock):
     return sh
 
 
-def test_negotiate_handles_iac_straddling_reads():
-    a, b = socket.socketpair()
-    sh = _bare_shell(a)
-    # IAC DO TTYPE split as [IAC] then [DO TTYPE]; then data
-    assert sh._negotiate(b"\xff") == b""
-    assert sh._negotiate(b"\xfd\x18hello") == b"hello"
-    # escaped 0xff in data
-    assert sh._negotiate(b"\xff\xffend") == b"\xffend"
-    a.close()
-    b.close()
+class TestNegotiate(unittest.TestCase):
 
+    def test_iac_straddling_reads(self):
+        a, b = socket.socketpair()
+        try:
+            sh = _bare_shell(a)
+            self.assertEqual(sh._negotiate(b"\xff"), b"")
+            self.assertEqual(sh._negotiate(b"\xfd\x18hello"), b"hello")
+            self.assertEqual(sh._negotiate(b"\xff\xffend"), b"\xffend")
+        finally:
+            a.close()
+            b.close()
 
-def test_negotiate_sb_frame_split_across_reads():
-    a, b = socket.socketpair()
-    sh = _bare_shell(a)
-    frame = b"\xff\xfa\x24\x00\x01\x02\xff\xf0tail"
-    assert sh._negotiate(frame[:5]) == b""
-    assert sh._negotiate(frame[5:]) == b"tail"
-    a.close()
-    b.close()
+    def test_sb_frame_split_across_reads(self):
+        a, b = socket.socketpair()
+        try:
+            sh = _bare_shell(a)
+            frame = b"\xff\xfa\x24\x00\x01\x02\xff\xf0tail"
+            self.assertEqual(sh._negotiate(frame[:5]), b"")
+            self.assertEqual(sh._negotiate(frame[5:]), b"tail")
+        finally:
+            a.close()
+            b.close()
 
-
-# -- fake busybox telnet server ---------------------------------------------------
 
 class FakeBusybox(threading.Thread):
     """Speaks a minimal busybox telnetd session over a real socket."""
@@ -166,7 +162,8 @@ class FakeBusybox(threading.Thread):
                 conn, _ = self.sock.accept()
             except OSError:
                 return
-            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+            threading.Thread(target=self._serve, args=(conn,),
+                             daemon=True).start()
 
     @staticmethod
     def _clean(line):
@@ -195,7 +192,8 @@ class FakeBusybox(threading.Thread):
                 conn.sendall(b"Login incorrect\r\n\r\nlogin: ")
                 return
             if self.last_login:
-                conn.sendall(b"\r\nLast login: Sun Nov 22 21:00:00 UTC 2026 on pts/0\r\n")
+                conn.sendall(b"\r\nLast login: Sun Nov 22 21:00:00 UTC 2026"
+                             b" on pts/0\r\n")
             conn.sendall(self.BANNER + b"/ # ")
             while True:
                 line, rest = self._recv_line(conn, rest)
@@ -210,9 +208,9 @@ class FakeBusybox(threading.Thread):
                 elif "dd if=" in cmd:
                     idx = int(re.search(r"mtd(\d+)ro", cmd).group(1))
                     armor = base64.b64encode(
-                        self.blobs.get(idx, b"") if isinstance(self.blobs, dict)
-                        else self.blobs)
-                    # a prompt-noise line before the armor, then wrapped payload
+                        self.blobs.get(idx, b"")
+                        if isinstance(self.blobs, dict) else self.blobs)
+                    # a prompt-noise line, then the armored payload
                     out = b"\r\n/ # \r\n" + armor + b"\r\n"
                     rc = 0
                 elif "false" in cmd:
@@ -243,89 +241,113 @@ def _shell(srv, **kw):
     return TelnetShell("127.0.0.1", srv.port, user="root", **kw)
 
 
-def test_end_to_end_dump_byte_exact(tmp_path):
-    blobs = {0: os.urandom(4), 1: os.urandom(16), 2: os.urandom(0x1000)}
-    srv = FakeBusybox(blobs=blobs)
-    try:
-        sh = _shell(srv, password="ivideo")
+class TestEndToEnd(unittest.TestCase):
+
+    def setUp(self):
+        self.servers = []
+
+    def tearDown(self):
+        for srv in self.servers:
+            srv.sock.close()
+
+    def _server(self, **kw):
+        srv = FakeBusybox(**kw)
+        self.servers.append(srv)
+        return srv
+
+    def test_dump_byte_exact(self):
+        import shutil
+        tmp = tempfile.mkdtemp()
         try:
-            rc, mtd = sh.run("cat /proc/mtd")
-            assert rc == 0 and "mtd0" in mtd
-            parts = parse_proc_mtd(mtd)
-            assert [p["idx"] for p in parts if not p["ubi"]] == [0, 1, 2]
-            for p in parts:
-                if p["ubi"]:
-                    continue
-                path = str(tmp_path / f"mtd{p['idx']}.bin")
-                ok, n = dump_partition(sh, p, path)
-                assert ok and n == p["size"] == len(blobs[p["idx"]])
-                with open(path, "rb") as f:
-                    assert f.read() == blobs[p["idx"]]
+            blobs = {0: os.urandom(4), 1: os.urandom(16), 2: os.urandom(0x1000)}
+            srv = self._server(blobs=blobs)
+            sh = _shell(srv, password="ivideo")
+            try:
+                rc, mtd = sh.run("cat /proc/mtd")
+                self.assertEqual(rc, 0)
+                self.assertIn("mtd0", mtd)
+                parts = parse_proc_mtd(mtd)
+                self.assertEqual([p["idx"] for p in parts if not p["ubi"]],
+                                 [0, 1, 2])
+                for p in parts:
+                    if p["ubi"]:
+                        continue
+                    path = os.path.join(tmp, f"mtd{p['idx']}.bin")
+                    ok, n = dump_partition(sh, p, path)
+                    self.assertTrue(ok)
+                    self.assertEqual(n, p["size"])
+                    self.assertEqual(n, len(blobs[p["idx"]]))
+                    with open(path, "rb") as f:
+                        self.assertEqual(f.read(), blobs[p["idx"]])
+            finally:
+                sh.close()
         finally:
-            sh.close()
-    finally:
-        srv.sock.close()
+            shutil.rmtree(tmp, ignore_errors=True)
 
-
-def test_logout_failed():
-    srv = FakeBusybox()
-    try:
-        with pytest.raises(ShellError):
+    def test_logout_failed(self):
+        srv = self._server()
+        with self.assertRaises(ShellError):
             _shell(srv, password="wrong")
-    finally:
-        srv.sock.close()
 
-
-def test_last_login_banner_is_not_a_login_failure():
-    srv = FakeBusybox(last_login=True)
-    try:
-        sh = _shell(srv, password="ivideo")       # must not raise
+    def test_last_login_banner_is_not_a_login_failure(self):
+        srv = self._server(last_login=True)
+        sh = _shell(srv, password="ivideo")        # must not raise
         try:
-            assert sh.run("false")[0] == 1        # rc propagates through the shell
+            self.assertEqual(sh.run("false")[0], 1)
         finally:
             sh.close()
-    finally:
-        srv.sock.close()
 
-
-def test_dump_failure_never_truncates_a_previous_backup(tmp_path):
-    good = tmp_path / "mtd1-defcfg.bin"
-    good.write_bytes(b"PREVIOUS GOOD BACKUP" + b"\x00" * 4)
-    srv = FakeBusybox(blobs={1: os.urandom(0x10 - 1)})   # short by one byte
-    try:
-        sh = _shell(srv, password="ivideo")
+    def test_dump_failure_never_truncates_a_previous_backup(self):
+        import shutil
+        tmp = tempfile.mkdtemp()
         try:
-            rc, mtd = sh.run("cat /proc/mtd")
-            part = [p for p in parse_proc_mtd(mtd) if p["idx"] == 1][0]
-            with pytest.raises(ShellError):
-                dump_partition(sh, part, str(good))
-            assert good.read_bytes().startswith(b"PREVIOUS GOOD BACKUP")
-            assert not list(tmp_path.glob("*.part"))
+            good = os.path.join(tmp, "mtd1-defcfg.bin")
+            with open(good, "wb") as f:
+                f.write(b"PREVIOUS GOOD BACKUP" + b"\x00" * 4)
+            srv = self._server(blobs={1: os.urandom(0x10 - 1)})   # short by one
+            sh = _shell(srv, password="ivideo")
+            try:
+                rc, mtd = sh.run("cat /proc/mtd")
+                part = [p for p in parse_proc_mtd(mtd) if p["idx"] == 1][0]
+                with self.assertRaises(ShellError):
+                    dump_partition(sh, part, good)
+                with open(good, "rb") as f:
+                    self.assertTrue(f.read().startswith(b"PREVIOUS GOOD BACKUP"))
+                self.assertEqual([], [n for n in os.listdir(tmp)
+                                      if n.endswith(".part")])
+            finally:
+                sh.close()
         finally:
-            sh.close()
-    finally:
-        srv.sock.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_backup_default_skips_ubi_but_explicit_selects_it(self):
+        import shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            blobs = {0: os.urandom(4), 1: os.urandom(16), 2: os.urandom(0x1000)}
+            srv = self._server(blobs=blobs)
+            res = backup("127.0.0.1", tmp, port=srv.port, user="root",
+                         password="ivideo", verbose=False)
+            self.assertEqual([r["idx"] for r in res], [0, 1, 2])   # 10-12 skip
+            self.assertFalse(os.path.exists(
+                os.path.join(tmp, "mtd12-config.bin")))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        tmp2 = tempfile.mkdtemp()
+        try:
+            ubi = {12: os.urandom(0x20)}
+            srv2 = self._server(blobs=ubi)
+            res = backup("127.0.0.1", tmp2, port=srv2.port, user="root",
+                         password="ivideo", parts=[12], verbose=False)
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0]["idx"], 12)
+            self.assertTrue(res[0]["ubi"])
+            with open(os.path.join(tmp2, "mtd12-config.bin"), "rb") as f:
+                self.assertEqual(f.read(), ubi[12])
+        finally:
+            shutil.rmtree(tmp2, ignore_errors=True)
 
 
-def test_backup_default_skips_ubi_but_explicit_selects_it(tmp_path):
-    blobs = {0: os.urandom(4), 1: os.urandom(16), 2: os.urandom(0x1000)}
-    srv = FakeBusybox(blobs=blobs)
-    try:
-        res = backup("127.0.0.1", str(tmp_path), port=srv.port,
-                    user="root", password="ivideo", verbose=False)
-        assert [r["idx"] for r in res] == [0, 1, 2]     # 10-12 skipped
-        assert not (tmp_path / "mtd12-config.bin").exists()
-    finally:
-        srv.sock.close()
-
-    ubi = {12: os.urandom(0x20)}
-    srv2 = FakeBusybox(blobs=ubi)
-    try:
-        out = str(tmp_path / "ubi")
-        res = backup("127.0.0.1", out, port=srv2.port, user="root",
-                     password="ivideo", parts=[12], verbose=False)
-        assert len(res) == 1 and res[0]["idx"] == 12 and res[0]["ubi"]
-        with open(f"{out}/mtd12-config.bin", "rb") as f:
-            assert f.read() == ubi[12]
-    finally:
-        srv2.sock.close()
+if __name__ == "__main__":
+    unittest.main()
