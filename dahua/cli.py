@@ -247,32 +247,58 @@ def main(argv: list[str] | None = None) -> int:
                 print("[+] telnet disabled", file=sys.stderr)
         elif cmd == "nanddump":
             from .nanddump import backup
+            # Only touch the device config when needed, and put it back:
+            # telnet is a root shell -- do not leave it enabled behind us.
+            was_on = None
+            enabled_by_us = False
+            try:
+                was_on = cam.telnet_enabled()
+            except Exception:
+                pass                       # unreadable state: assume off
             if not args.no_enable_telnet:
-                cam.set_telnet(True)
-                print("[+] telnet enabled via DHIP", file=sys.stderr)
-            parts = ([int(p) for p in args.parts.split(",") if p != ""]
-                     if args.parts else None)
-            t0 = time.time()
-            res = backup(args.host, args.output, port=args.telnet_port,
-                         user=args.shell_user, password=args.shell_pass,
-                         parts=parts)
-            total = sum(r["bytes"] for r in res)
-            print(f"[+] dumped {len(res)} partitions, {total} bytes "
-                  f"in {time.time() - t0:.0f}s -> {args.output}",
-                  file=sys.stderr)
-            if not all(r["ok"] for r in res):
-                print("!! some partitions have a SIZE MISMATCH -- rerun them",
+                if not was_on:
+                    cam.set_telnet(True)
+                    enabled_by_us = True
+                    print("[+] telnet enabled via DHIP", file=sys.stderr)
+                else:
+                    print("[-] telnet already enabled", file=sys.stderr)
+            try:
+                parts = ([int(p) for p in args.parts.split(",") if p != ""]
+                         if args.parts else None)
+                t0 = time.time()
+                res = backup(args.host, args.output, port=args.telnet_port,
+                             user=args.shell_user, password=args.shell_pass,
+                             parts=parts)
+                total = sum(r["bytes"] for r in res)
+                print(f"[+] dumped {len(res)} partitions, {total} bytes "
+                      f"in {time.time() - t0:.0f}s -> {args.output}",
                       file=sys.stderr)
-                return 1
+            finally:
+                if enabled_by_us:
+                    try:
+                        cam.set_telnet(False)
+                        print("[+] telnet disabled again (was off before)",
+                              file=sys.stderr)
+                    except Exception as exc:
+                        print(f"!! could NOT disable telnet again: {exc}\n"
+                              "   Disable it yourself: dhip <host> telnet off",
+                              file=sys.stderr)
         elif cmd == "upgrade":
-            if args.state or args.package is None:
+            if args.state:
+                if args.package:
+                    print("--state is a read-only probe; drop the package "
+                          "argument to flash", file=sys.stderr)
+                    return 2
                 try:
                     _print(cam.firmware_state())
-                except Exception as exc:            # many firmwares lack getState
-                    print(f"[-] upgrader.getState not supported: {exc}",
-                          file=sys.stderr)
-                if not args.package:
                     return 0
+                except Exception as exc:        # many firmwares lack getState
+                    print(f"[-] upgrader.getState failed: {exc}", file=sys.stderr)
+                    return 1
+            if args.package is None:
+                print("nothing to do: pass a package (with --confirm) or "
+                      "--state", file=sys.stderr)
+                return 2
             if not args.confirm:
                 print("refusing to flash without --confirm: a wrong package "
                       "bricks the device. Take an `nanddump` backup first.",
