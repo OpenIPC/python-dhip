@@ -115,6 +115,13 @@ dhip 10.0.0.10 -u admin -P admin54321 ptz Left --duration 0.5
 dhip 10.0.0.10 -u admin -P admin54321 snapshot out.jpg
 dhip 10.0.0.10 -u admin -P admin54321 events --codes VideoMotion
 
+# enable the vendor telnet shell and back up every raw MTD partition
+# over it (no UART/TFTP/NFS needed); needs the camera root shell password
+dhip 10.0.0.10 -u admin -P admin54321 nanddump ./backup --shell-pass ivideo
+
+# flash a vendor upgrade package (Dahua "zzip") -- destructive: needs --confirm
+dhip 10.0.0.10 -u admin -P admin54321 upgrade NC-IPTC2200_DL_4G-4_OpenIPC_gk7205v510.bin --confirm
+
 # raw one-shot RPC (backward compatible with the original tool)
 dhip 10.0.0.10 -u admin -P admin54321 -m magicBox.getSystemInfo
 dhip 10.0.0.10 -u admin -P admin54321 -m configManager.getConfig --params '{"name":"General"}'
@@ -226,6 +233,10 @@ what is reconstructed and covered only by the offline test suite.
   (`upgrader.prepare` → chunked `appendData` → `execute`) flashed an OpenIPC
   package onto a GK7205V510 end-to-end and rebooted into it. **Destructive** —
   requires `confirm=True` and a package built for the exact target.
+- Full NAND backup over the vendor telnet shell: `nanddump` (the CLI enables
+  telnet via DHIP, then reads every raw `/dev/mtdNro` with `dd | base64` and
+  verifies each size against `/proc/mtd`) reproduced a full 128 MiB vendor
+  flash byte-exact on a GK7205V510. Root shell account required.
 
 **Reconstructed / covered by the offline tests only**
 

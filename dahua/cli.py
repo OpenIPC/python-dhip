@@ -13,6 +13,8 @@ plus high-level subcommands::
     dhip HOST ptz Left --duration 0.5
     dhip HOST snapshot out.jpg
     dhip HOST events --codes VideoMotion
+    dhip HOST nanddump ./backup --shell-pass <rootpass>
+    dhip HOST upgrade coupler.bin --confirm
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 
 from . import const
 from .client import DahuaClient
@@ -105,6 +108,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_tel = sub.add_parser("telnet", help="enable/disable the built-in telnet server")
     p_tel.add_argument("state", nargs="?", choices=("on", "off"),
                        help="omit to read the current state")
+
+    p_nd = sub.add_parser("nanddump",
+                          help="back up every raw MTD partition over the "
+                               "vendor telnet shell (no UART/TFTP needed)")
+    p_nd.add_argument("output", help="output directory for mtdN-<name>.bin files")
+    p_nd.add_argument("--telnet-port", type=int, default=23)
+    p_nd.add_argument("--shell-user", default="root",
+                      help="telnet shell login (camera root account)")
+    p_nd.add_argument("--shell-pass", default="",
+                      help="telnet shell password (often the same as serial root)")
+    p_nd.add_argument("--parts", metavar="LIST",
+                      help="comma-separated MTD indices (default: all raw partitions)")
+    p_nd.add_argument("--no-enable-telnet", action="store_true",
+                      help="do not enable telnet via DHIP first (already enabled)")
+
+    p_up = sub.add_parser("upgrade",
+                          help="flash a vendor upgrade package (Dahua zzip) over DHIP")
+    p_up.add_argument("package", nargs="?",
+                     help="package file, e.g. the coupler .bin from the releases")
+    p_up.add_argument("--confirm", action="store_true",
+                      help="acknowledge the brick risk and proceed")
+    p_up.add_argument("--type", dest="fw_type", default="System",
+                      help="upgrader type parameter (default: System)")
+    p_up.add_argument("--state", action="store_true",
+                      help="only query the current upgrader state (read-only)")
     return ap
 
 
@@ -217,6 +245,74 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 cam.set_telnet(False)
                 print("[+] telnet disabled", file=sys.stderr)
+        elif cmd == "nanddump":
+            from .nanddump import backup
+            # Only touch the device config when needed, and put it back:
+            # telnet is a root shell -- do not leave it enabled behind us.
+            was_on = None
+            enabled_by_us = False
+            try:
+                was_on = cam.telnet_enabled()
+            except Exception:
+                pass                       # unreadable state: assume off
+            if not args.no_enable_telnet:
+                if not was_on:
+                    cam.set_telnet(True)
+                    enabled_by_us = True
+                    print("[+] telnet enabled via DHIP", file=sys.stderr)
+                else:
+                    print("[-] telnet already enabled", file=sys.stderr)
+            try:
+                parts = ([int(p) for p in args.parts.split(",") if p != ""]
+                         if args.parts else None)
+                t0 = time.time()
+                res = backup(args.host, args.output, port=args.telnet_port,
+                             user=args.shell_user, password=args.shell_pass,
+                             parts=parts)
+                total = sum(r["bytes"] for r in res)
+                print(f"[+] dumped {len(res)} partitions, {total} bytes "
+                      f"in {time.time() - t0:.0f}s -> {args.output}",
+                      file=sys.stderr)
+            finally:
+                if enabled_by_us:
+                    try:
+                        cam.set_telnet(False)
+                        print("[+] telnet disabled again (was off before)",
+                              file=sys.stderr)
+                    except Exception as exc:
+                        print(f"!! could NOT disable telnet again: {exc}\n"
+                              "   Disable it yourself: dhip <host> telnet off",
+                              file=sys.stderr)
+        elif cmd == "upgrade":
+            if args.state:
+                if args.package:
+                    print("--state is a read-only probe; drop the package "
+                          "argument to flash", file=sys.stderr)
+                    return 2
+                try:
+                    _print(cam.firmware_state())
+                    return 0
+                except Exception as exc:        # many firmwares lack getState
+                    print(f"[-] upgrader.getState failed: {exc}", file=sys.stderr)
+                    return 1
+            if args.package is None:
+                print("nothing to do: pass a package (with --confirm) or "
+                      "--state", file=sys.stderr)
+                return 2
+            if not args.confirm:
+                print("refusing to flash without --confirm: a wrong package "
+                      "bricks the device. Take an `nanddump` backup first.",
+                      file=sys.stderr)
+                return 1
+            resp = cam.upgrade_firmware(
+                args.package, confirm=True, fw_type=args.fw_type,
+                progress=lambda done, total: print(
+                    f"\r[+] upload {done}/{total} bytes", end="",
+                    file=sys.stderr))
+            print(file=sys.stderr)
+            _print(resp)
+            print("[+] upgrade started; the device writes it out and reboots "
+                  "itself (give it a few minutes)", file=sys.stderr)
         elif cmd == "events":
             listener = cam.events(codes=args.codes)
             print(f"[+] listening for events {args.codes} (Ctrl-C to stop)",
@@ -227,7 +323,8 @@ def main(argv: list[str] | None = None) -> int:
                 listener.stop()
         else:
             print("nothing to do; pass -m METHOD or a subcommand "
-                  "(info/config/users/ptz/snapshot/events/telnet)", file=sys.stderr)
+                  "(info/config/users/ptz/snapshot/events/telnet/nanddump)",
+                  file=sys.stderr)
             return 2
     return 0
 
